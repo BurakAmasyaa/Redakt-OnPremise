@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.DS_Store
+
+# Yerel yapılandırma ve sırlar — asla commit edilmez
+.env
+.env.*
+!.env.example
+config.local.json
+
+# Test/geliştirme çıktıları
+outputs/
+screenshots/
+.qa/

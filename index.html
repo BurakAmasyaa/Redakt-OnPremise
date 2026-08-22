@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#FAFAF7" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta
+      name="description"
+      content="Word, Excel, PDF ve TXT belgelerindeki hassas bilgileri tamamen tarayıcınızda maskeleyin."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Redakt — Belgen paylaşılmaya hazır." />
+    <meta
+      property="og:description"
+      content="Hassas bilgileri (kişi, kurum, T.C. kimlik, IBAN, telefon) otomatik bulur ve maskeler. Dosyan bu tarayıcı sekmesinden hiç çıkmaz."
+    />
+    <meta property="og:image" content="https://redaktt.com/favicon.ico" />
+    <meta property="og:url" content="https://redaktt.com" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Redakt — Belgen paylaşılmaya hazır." />
+    <meta
+      name="twitter:description"
+      content="Hassas bilgileri (kişi, kurum, T.C. kimlik, IBAN, telefon) otomatik bulur ve maskeler. Dosyan bu tarayıcı sekmesinden hiç çıkmaz."
+    />
+    <meta name="twitter:image" content="https://redaktt.com/favicon.ico" />
+    <title>Redakt — Belgen paylaşılmaya hazır.</title>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/switzer-regular.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/switzer-semibold.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/switzer-bold.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script src="/chunk-recovery.js"></script>
+    <script type="module" src="/src/main.js"></script>
+  </head>
+  <body>
+    <div class="grain-overlay" aria-hidden="true"></div>
+    <header class="topbar">
+      <button class="brand pressable" id="brand-button" type="button" aria-label="Başa dön">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 28 28" focusable="false">
+            <path class="brand-page" d="M7 4h10l4 4v16H7z" />
+            <path class="brand-fold" d="M17 4v4h4z" />
+            <rect class="brand-redaction" x="10" y="12" width="8" height="2.3" rx="1.15" />
+            <rect class="brand-redaction" x="10" y="17" width="6" height="2.3" rx="1.15" />
+          </svg>
+        </span>
+        <span>Redakt</span>
+      </button>
+      <div class="nav-meta">
+        <div class="local-badge">
+          <span class="local-pulse" aria-hidden="true"></span>
+          Verin sende saklı
+        </div>
+        <span class="beta-badge">Beta</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="stage stage-upload is-active" id="upload-stage" aria-labelledby="upload-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Yerel ve özel</p>
+          <h1 id="upload-title">Belgen paylaşılmaya hazır.</h1>
+          <p class="lede">
+            Hassas bilgileri (kişi, kurum, T.C. kimlik, IBAN, telefon) otomatik bulur ve maskeler.
+            Dosyan bu tarayıcı sekmesinden hiç çıkmaz.
+          </p>
+        </div>
+
+        <div
+          class="drop-surface pressable"
+          id="drop-zone"
+          role="button"
+          tabindex="0"
+          aria-describedby="drop-description privacy-detail pdf-support-note"
+        >
+          <input id="file-input" type="file" accept=".docx,.xlsx,.pdf,.txt,.jpg,.jpeg,.png" multiple hidden />
+          <div class="document-glyph" aria-hidden="true">
+            <svg viewBox="0 0 72 88" focusable="false">
+              <path class="document-page" d="M12 2h34l14 14v70H12z" />
+              <path class="document-fold" d="M46 2v14h14z" />
+              <rect class="redaction-bar" x="22" y="32" width="29" height="6" rx="3" />
+              <rect class="redaction-bar" x="22" y="46" width="22" height="6" rx="3" />
+              <rect class="redaction-bar" x="22" y="60" width="27" height="6" rx="3" />
+            </svg>
+          </div>
+          <div class="drop-text">
+            <h2>Dosyanı buraya bırak</h2>
+            <p id="drop-description">veya seçmek için tıkla</p>
+          </div>
+          <span class="file-types">DOCX · XLSX · PDF · TXT · JPG · PNG</span>
+          <div class="drop-shine" aria-hidden="true"></div>
+        </div>
+
+        <div class="upload-options">
+          <span>Birden fazla dosya seçebilir veya</span>
+          <input id="folder-input" type="file" accept=".docx,.xlsx,.pdf,.txt,.jpg,.jpeg,.png" webkitdirectory directory multiple hidden />
+          <button class="folder-select-button pressable" id="folder-select-button" type="button">Klasör seç</button>
+        </div>
+
+        <p class="pdf-support-note" id="pdf-support-note">Taranmış PDF sayfaları ve Office içine gömülü raster görseller cihazındaki Türkçe + İngilizce OCR ile okunur.</p>
+
+        <section class="scan-setup" id="scan-setup" aria-labelledby="scan-setup-title" hidden>
+          <div class="selected-file-bar" id="selected-file-bar">
+            <span class="mini-document" aria-hidden="true"></span>
+            <span class="file-chip-copy">
+              <strong id="selected-filename"></strong>
+              <small id="selected-filename-detail">Tarama ayarlarını seç</small>
+            </span>
+            <button class="text-button pressable" id="change-file" type="button">Değiştir</button>
+          </div>
+          <p class="large-file-warning" id="large-file-warning" role="status" hidden></p>
+          <div class="queue-list" id="queue-list" aria-label="Dosya kuyruğu" hidden></div>
+          <button class="danger-outline pressable queue-cancel-all" id="queue-cancel-all" type="button" hidden>
+            Hepsini İptal Et
+          </button>
+
+          <fieldset class="profile-fieldset">
+            <legend id="scan-setup-title">Tarama Seviyesi</legend>
+            <div class="profile-options">
+              <label class="profile-option pressable">
+                <input type="radio" name="processing-profile" value="fast" />
+                <span><strong>⚡ Hızlı</strong><small>Daha az kaynak kullanır; temiz ve basit belgeler için.</small></span>
+              </label>
+              <label class="profile-option pressable">
+                <input type="radio" name="processing-profile" value="balanced" checked />
+                <span><strong>● Dengeli</strong><small>Hız ve kapsam arasında önerilen ayar.</small></span>
+              </label>
+              <label class="profile-option pressable">
+                <input type="radio" name="processing-profile" value="thorough" />
+                <span><strong>⌕ Kapsamlı</strong><small>Daha ayrıntılı tarar; daha uzun sürebilir.</small></span>
+              </label>
+            </div>
+            <p class="device-recommendation" id="device-recommendation"></p>
+          </fieldset>
+
+          <section class="custom-rules-card" aria-labelledby="custom-rules-title">
+            <div class="custom-rules-heading">
+              <div>
+                <h2 id="custom-rules-title">Kendi Kurallarım</h2>
+                <p>Bu dosyada aynen geçen özel ifadeleri kendi metninle değiştir.</p>
+              </div>
+              <button class="rule-add pressable" id="rule-add" type="button">+ Kural ekle</button>
+            </div>
+            <div class="custom-rules-list" id="custom-rules-list"></div>
+            <p class="custom-rules-empty" id="custom-rules-empty">Henüz özel kural yok. Kurallar kaydedilmez ve yalnızca bu işlemde kullanılır.</p>
+
+            <div class="rule-import-panel">
+              <div class="rule-import-copy">
+                <strong>Kurumsal kurallar <span class="rule-source-badge" id="rule-source-badge" data-tone="loading">Yükleniyor</span></strong>
+                <p>Kurallar şirket veritabanından okunur ve yöneticiniz tarafından yönetilir.</p>
+              </div>
+              <div class="rule-import-actions">
+                <button class="rule-import-button pressable" id="rule-refresh-button" type="button">Yenile</button>
+              </div>
+              <p class="rule-import-status" id="rule-import-status" aria-live="polite"></p>
+              <div class="saved-rules" id="saved-rules" hidden>
+                <div class="saved-rules-heading">
+                  <strong id="saved-rules-count"></strong>
+                  <span>Cihazda saklanmaz</span>
+                </div>
+                <div class="saved-rules-list" id="saved-rules-list"></div>
+              </div>
+            </div>
+          </section>
+
+          <button class="primary-button scan-button pressable" id="scan-button" type="button">
+            <span id="scan-button-label">Belgeyi tara</span><span class="arrow-box" aria-hidden="true">→</span>
+          </button>
+        </section>
+
+        <div class="trust-strip" id="privacy-detail">
+          <div class="trust-item">
+            <span class="trust-icon lock-icon" aria-hidden="true"></span>
+            <span><strong>Belge içeriğin hiçbir sunucuya gönderilmez</strong><small>İşlem yalnızca cihaz belleğinde gerçekleşir.</small></span>
+          </div>
+          <span class="trust-separator" aria-hidden="true"></span>
+          <div class="trust-item">
+            <span class="trust-icon format-icon" aria-hidden="true">Aa</span>
+            <span><strong>Güvenli çıktı</strong><small>Office biçimi korunur; PDF metin katmanı kaldırılarak düzleştirilir.</small></span>
+          </div>
+        </div>
+
+        <div class="upload-explainer" aria-label="Redakt nasıl çalışır">
+          <section class="how-it-works" aria-labelledby="how-it-works-title">
+            <h2 id="how-it-works-title">Nasıl çalışır</h2>
+            <p><span>1. Belgeni seç</span><i aria-hidden="true">→</i><span>2. Hassas bilgileri kontrol et</span><i aria-hidden="true">→</i><span>3. Maskelenmiş dosyayı indir</span></p>
+          </section>
+          <section class="masking-example" aria-labelledby="masking-example-title">
+            <h2 id="masking-example-title">Örnek</h2>
+            <p><span>Ahmet Yılmaz, ABC A.Ş.'de çalışmaktadır.</span><i aria-hidden="true">→</i><code>[KİŞİ_1], [KURUM_1]'de çalışmaktadır.</code></p>
+          </section>
+        </div>
+      </section>
+
+      <section class="stage stage-batch" id="batch-stage" aria-labelledby="batch-title" hidden>
+        <button class="back-button pressable" id="batch-back" type="button">
+          <span aria-hidden="true">‹</span> Yeni dosyalar seç
+        </button>
+        <div class="batch-heading">
+          <div>
+            <p class="eyebrow">Çoklu dosya görünümü</p>
+            <h1 id="batch-title">Tarama özeti.</h1>
+            <p class="lede compact" id="batch-subtitle"></p>
+            <p class="batch-instruction" id="batch-instruction" aria-live="polite">Her dosyayı incelemek için üzerine tıkla ya da hazırsan hepsini birden indir.</p>
+          </div>
+          <div class="batch-heading-actions">
+            <button class="primary-button small pressable" id="batch-download-all" type="button">Tümünü Maskele ve İndir</button>
+            <button class="danger-outline pressable" id="batch-cancel-all" type="button">Hepsini İptal Et</button>
+          </div>
+        </div>
+
+        <div class="batch-tabs" role="tablist" aria-label="Çoklu dosya görünümü">
+          <button class="batch-tab pressable is-active" id="batch-summary-tab" type="button" role="tab" aria-selected="true">ÖZET</button>
+          <button class="batch-tab pressable" id="batch-files-tab" type="button" role="tab" aria-selected="false">TEKİL</button>
+        </div>
+
+        <section class="batch-view batch-summary-view" id="batch-summary-view" aria-labelledby="batch-summary-tab">
+          <div class="batch-total" id="batch-total"></div>
+          <div class="aggregate-grid" id="aggregate-grid" aria-label="Tüm dosyalardaki kategori toplamları"></div>
+          <p class="batch-note">Ayrıntılı maskeleme kararlarını Tekil görünümde dosya bazında değiştirebilirsin.</p>
+        </section>
+
+        <section class="batch-view batch-files-view" id="batch-files-view" aria-labelledby="batch-files-tab" hidden>
+          <div class="batch-file-list" id="batch-file-list"></div>
+        </section>
+
+      </section>
+
+      <section class="stage stage-review" id="review-stage" aria-labelledby="review-title" hidden>
+        <button class="back-button pressable" id="review-back" type="button">
+          <span aria-hidden="true">‹</span> Başka dosya seç
+        </button>
+
+        <div class="review-heading">
+          <div class="review-copy">
+            <p class="eyebrow">Kontrol sende</p>
+            <h1 id="review-title">Bulduklarımı gözden geçir.</h1>
+            <p class="lede compact">
+              Maskelemek istemediklerinin seçimini kaldır. Aynı değer her yerde aynı etiketi alır.
+            </p>
+          </div>
+          <div class="file-chip" aria-label="Seçilen dosya">
+            <span class="mini-document" aria-hidden="true"></span>
+            <span class="file-chip-copy">
+              <strong id="review-filename"></strong>
+              <small id="review-total"></small>
+            </span>
+          </div>
+        </div>
+
+        <div class="review-controls" id="review-controls">
+        <div class="review-panel">
+          <div class="panel-toolbar">
+            <div>
+              <h2>Hassas bilgiler</h2>
+              <p id="selection-status" aria-live="polite"></p>
+            </div>
+            <label class="select-all pressable">
+              <input id="select-all" type="checkbox" checked />
+              <span class="check-control" aria-hidden="true"></span>
+              Tümünü seç
+            </label>
+          </div>
+          <div class="category-summary" id="category-summary" aria-label="Kategori özeti"></div>
+          <div class="finding-list" id="finding-list">
+            <section class="confidence-group custom-group" id="custom-group" aria-labelledby="custom-title" hidden>
+              <header class="confidence-heading">
+                <span class="confidence-badge custom-badge" id="custom-title"><i aria-hidden="true">→</i> Kendi kuralların</span>
+                <p>Senin belirlediğin literal değişimler; otomatik bulgulardan önceliklidir.</p>
+                <strong id="custom-count"></strong>
+              </header>
+              <div id="custom-list"></div>
+            </section>
+            <section class="confidence-group exact-group" id="exact-group" aria-labelledby="exact-title">
+              <header class="confidence-heading">
+                <span class="confidence-badge exact-badge" id="exact-title"><i aria-hidden="true">✓</i> Kesin</span>
+                <p>Doğrulanan veya senin kaydettiğin kurallarla eşleşen bulgular.</p>
+                <strong id="exact-count"></strong>
+              </header>
+              <div id="exact-list"></div>
+            </section>
+            <section class="confidence-group probable-group" id="probable-group" aria-labelledby="probable-title">
+              <header class="confidence-heading">
+                <span class="confidence-badge probable-badge" id="probable-title"><i aria-hidden="true">~</i> Muhtemel</span>
+                <p>Kişi ve kurum adları bağlama göre değerlendirilir. <span class="probable-review-note">Maskelemeden önce gözden geçirmenizi öneririz.</span></p>
+                <strong id="probable-count"></strong>
+              </header>
+              <div id="probable-list"></div>
+            </section>
+          </div>
+          <div class="empty-state" id="empty-state" hidden>
+            <span aria-hidden="true">✓</span>
+            <h3>Hassas bilgi bulunmadı.</h3>
+            <p>Doğrulanabilir alanlar ile kişi ve kurum adları tarandı.</p>
+          </div>
+        </div>
+
+        <label class="mapping-card pressable" id="mapping-card">
+          <input id="mapping-toggle" type="checkbox" />
+          <span class="switch" aria-hidden="true"><i></i></span>
+          <span>
+            <strong>Eşleştirme dosyası hazırla</strong>
+            <small>Orijinal değerleri geri doldurmak için; yalnızca bu sekmede oluşturulur.</small>
+          </span>
+        </label>
+
+        <div class="review-actions">
+          <div class="redact-cta-group">
+            <p class="beta-access-note">Üyelik yok · Reklam yok · Belge içeriği toplanmaz · Ücretsiz beta</p>
+            <button class="primary-button pressable" id="redact-button" type="button">
+              <span>Seçilenleri maskele</span>
+              <span class="arrow-box" aria-hidden="true">→</span>
+            </button>
+          </div>
+        </div>
+        </div>
+      </section>
+
+      <section class="stage stage-done" id="done-stage" aria-labelledby="done-title" hidden>
+        <div class="success-disc" aria-hidden="true"><span>✓</span></div>
+        <p class="eyebrow">İşlem tamamlandı</p>
+        <h1 id="done-title">Temiz kopyan hazır.</h1>
+        <p class="lede compact done-copy" id="done-copy">
+          Seçtiğin bilgiler tutarlı etiketlerle maskelendi. Orijinal dosyana dokunulmadı.
+        </p>
+
+        <div class="download-panel">
+          <div class="download-file">
+            <span class="mini-document ready" aria-hidden="true"></span>
+            <span class="file-chip-copy">
+              <strong id="download-filename"></strong>
+              <small id="download-detail">Paylaşmaya hazır</small>
+            </span>
+          </div>
+          <button class="primary-button small pressable" id="download-button" type="button">
+            Dosyayı indir <span aria-hidden="true">↓</span>
+          </button>
+        </div>
+
+        <button class="secondary-button pressable" id="mapping-download" type="button" hidden>
+          Eşleştirme dosyasını indir
+        </button>
+        <p class="mapping-warning" id="mapping-warning" hidden>
+          Bu dosya orijinal hassas bilgileri içerir; güvenli bir yerde sakla.
+        </p>
+        <button class="text-button pressable" id="start-over" type="button">Yeni bir belge temizle</button>
+        <button class="text-button pressable" id="done-batch-back" type="button" hidden>Dosya özetine dön</button>
+      </section>
+    </main>
+
+    <div class="drag-follower" id="drag-follower" aria-hidden="true">
+      <span class="drag-file"></span>
+      <strong>Bırak</strong>
+    </div>
+
+    <div class="processing-layer" id="processing-layer" role="status" aria-live="polite" hidden>
+      <div class="processing-card">
+        <span class="spinner" aria-hidden="true"></span>
+        <strong id="processing-title">Belge taranıyor…</strong>
+        <small id="processing-detail">Her şey bu tarayıcıda gerçekleşiyor.</small>
+        <div class="processing-progress" id="processing-progress" hidden>
+          <span id="processing-units"></span>
+          <span class="progress-track" aria-hidden="true"><i id="progress-bar"></i></span>
+          <span id="processing-percent"></span>
+          <span id="processing-eta"></span>
+        </div>
+        <button class="processing-cancel danger-outline pressable" id="processing-cancel" type="button">İptal et</button>
+      </div>
+    </div>
+
+    <div class="fatal-error-layer" id="fatal-error-layer" role="alert" hidden>
+      <section class="fatal-error-card" aria-labelledby="fatal-error-title">
+        <div class="not-found-motif" aria-hidden="true"><span>!</span><i></i></div>
+        <h2 id="fatal-error-title">Bir şeyler ters gitti.</h2>
+        <p>İşlem güvenli biçimde durduruldu. Sayfayı yenileyip tekrar deneyin.</p>
+        <button class="primary-button small pressable" id="fatal-error-reload" type="button">Sayfayı yenile</button>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="alert" hidden>
+      <span class="toast-symbol" aria-hidden="true">!</span>
+      <span id="toast-message"></span>
+      <button class="pressable" id="toast-close" type="button" aria-label="Bildirimi kapat">×</button>
+    </div>
+
+    <div class="confirm-layer" id="confirm-layer" hidden>
+      <section class="confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+        <p class="eyebrow" id="confirm-eyebrow">Geri alınamaz işlem</p>
+        <h2 id="confirm-title">Tüm işlemi iptal etmek istediğine emin misin?</h2>
+        <p class="confirm-detail" id="confirm-detail" hidden></p>
+        <div class="confirm-actions">
+          <button class="secondary-button pressable" id="confirm-dismiss" type="button">Vazgeç</button>
+          <button class="danger-outline pressable" id="confirm-accept" type="button">Hepsini İptal Et</button>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

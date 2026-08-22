@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Stale chunk recovery test</title>
+    <script src="/chunk-recovery.js"></script>
+  </head>
+  <body>
+    <output id="load-count"></output>
+    <script>
+      var countKey = "redakt:test-page-load-count";
+      var loadCount = Number(sessionStorage.getItem(countKey) || "0") + 1;
+      sessionStorage.setItem(countKey, String(loadCount));
+      document.getElementById("load-count").textContent = String(loadCount);
+    </script>
+    <script type="module">
+      var staleChunk = "/assets/stale-chunk-does-not-exist.js";
+      import(/* @vite-ignore */ staleChunk);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redakt Kurulum Soruları</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap">
+
+<style>
+  :root {
+    --ground: #f7f8fa;
+    --surface: #ffffff;
+    --sunken: #eef1f5;
+    --ink: #141a22;
+    --ink-soft: #3d4854;
+    --muted: #5c6874;
+    --faint: #8b95a1;
+    --line: #dde2e8;
+    --line-strong: #c3ccd6;
+    --accent: #1b4f8c;
+    --accent-soft: #e8eef7;
+    --critical: #a8481b;
+    --critical-soft: #f7ebe4;
+    --shadow: 0 1px 2px rgba(20, 26, 34, .06), 0 8px 24px -16px rgba(20, 26, 34, .28);
+
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "IBM Plex Serif", ui-serif, Georgia, "Times New Roman", serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #11151a;
+      --surface: #171c23;
+      --sunken: #1e242c;
+      --ink: #e6eaef;
+      --ink-soft: #c2cad4;
+      --muted: #94a0ad;
+      --faint: #6d7885;
+      --line: #2a323b;
+      --line-strong: #3b4550;
+      --accent: #6fa8e8;
+      --accent-soft: #1a2735;
+      --critical: #e0925f;
+      --critical-soft: #2c2019;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #11151a;
+    --surface: #171c23;
+    --sunken: #1e242c;
+    --ink: #e6eaef;
+    --ink-soft: #c2cad4;
+    --muted: #94a0ad;
+    --faint: #6d7885;
+    --line: #2a323b;
+    --line-strong: #3b4550;
+    --accent: #6fa8e8;
+    --accent-soft: #1a2735;
+    --critical: #e0925f;
+    --critical-soft: #2c2019;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+
+  /* ---------- Başlık ---------- */
+  .masthead {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding-bottom: 32px;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(30px, 5vw, 42px);
+    font-weight: 600;
+    letter-spacing: -.02em;
+    line-height: 1.12;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    max-width: 62ch;
+    margin: 0;
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    color: var(--ink-soft);
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    margin-top: 4px;
+  }
+
+  .meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .meta-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .meta-value {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink-soft);
+  }
+
+  /* ---------- Anahtar ---------- */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 28px 0 0;
+    padding: 16px 18px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  .legend p {
+    flex: 1 1 260px;
+    margin: 0;
+    font-size: 13.5px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 7px;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    vertical-align: 1px;
+  }
+
+  .tag.blocking { color: var(--critical); background: var(--critical-soft); }
+  .tag.standard { color: var(--accent); background: var(--accent-soft); }
+
+  /* ---------- Bölüm ---------- */
+  section { margin-top: 56px; }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line-strong);
+  }
+
+  .section-head h2 {
+    margin: 0;
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -.01em;
+  }
+
+  .section-owner {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .06em;
+    color: var(--faint);
+    text-transform: uppercase;
+  }
+
+  .section-intro {
+    max-width: 62ch;
+    margin: 14px 0 0;
+    font-family: var(--serif);
+    font-size: 15.5px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  /* ---------- Sorular ---------- */
+  .questions {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-top: 24px;
+  }
+
+  .question {
+    display: grid;
+    grid-template-columns: 46px minmax(0, 1fr);
+    gap: 0 18px;
+    padding: 20px 20px 20px 0;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line-strong);
+    border-radius: 3px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    break-inside: avoid;
+  }
+
+  .question.is-blocking { border-left-color: var(--critical); }
+
+  .q-num {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--faint);
+    text-align: right;
+    padding-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .q-body {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .q-ask {
+    margin: 0;
+    font-family: var(--serif);
+    font-size: 17.5px;
+    font-weight: 500;
+    line-height: 1.4;
+    color: var(--ink);
+    text-wrap: pretty;
+  }
+
+  .q-ask .tag { margin-left: 8px; }
+
+  .q-why {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--muted);
+    max-width: 66ch;
+  }
+
+  .q-why strong { color: var(--ink-soft); font-weight: 600; }
+
+  code {
+    padding: 1px 5px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    background: var(--sunken);
+    font-family: var(--mono);
+    font-size: .87em;
+    color: var(--ink-soft);
+    word-break: break-word;
+  }
+
+  .answer {
+    margin-top: 3px;
+    padding: 9px 12px;
+    border: 1px dashed var(--line-strong);
+    border-radius: 2px;
+    background: var(--sunken);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--faint);
+    min-height: 42px;
+  }
+
+  /* ---------- Kapanış ---------- */
+  .closing {
+    margin-top: 64px;
+    padding: 26px 28px;
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--accent);
+    border-radius: 3px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  .closing h2 {
+    margin: 0 0 12px;
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  .closing p {
+    margin: 0 0 10px;
+    max-width: 64ch;
+    font-size: 15px;
+    color: var(--ink-soft);
+    line-height: 1.62;
+  }
+
+  .closing p:last-child { margin-bottom: 0; }
+
+  .footer-note {
+    margin-top: 40px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--faint);
+  }
+
+  @media (max-width: 620px) {
+    .wrap { padding: 40px 16px 72px; }
+    .question { grid-template-columns: 32px minmax(0, 1fr); gap: 0 12px; padding: 16px 16px 16px 0; }
+    .section-head { flex-direction: column; gap: 4px; }
+  }
+
+  @page { size: A4; margin: 14mm 12mm; }
+  @media print {
+    body { background: #fff; color: #000; }
+    section { break-before: auto; }
+    .section-head { break-after: avoid; }
+    .question, .legend, .closing { box-shadow: none; }
+    .wrap { padding: 0; max-width: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Kurulum Öncesi Bilgi Talebi</p>
+    <h1>Redakt şirket içi kurulum soruları</h1>
+    <p class="standfirst">
+      Redakt, belgelerdeki kişi ve kurum adlarını maskeleyen bir uygulamadır. Şirket ağınızda,
+      kurallarını sizin SQL sunucunuzdan okuyacak şekilde kurulacak. Belgeler kullanıcının
+      tarayıcısından çıkmaz; sunucu yalnızca kural listesini okur.
+      Aşağıdaki sorular kurulumun şeklini belirliyor.
+    </p>
+    <div class="meta-row">
+      <div class="meta-item">
+        <span class="meta-label">Toplam soru</span>
+        <span class="meta-value">21</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Bloke eden</span>
+        <span class="meta-value">8</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Muhatap</span>
+        <span class="meta-value">DBA · Ağ · Sistem · İş birimi</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="legend">
+    <p>
+      <span class="tag blocking">Bloke eden</span> &nbsp;Cevap gelmeden kurulum planlanamaz.
+    </p>
+    <p>
+      <span class="tag standard">Önemli</span> &nbsp;Kurulumu şekillendirir, sonra da netleşebilir.
+    </p>
+  </div>
+
+  <!-- ============ A ============ -->
+  <section>
+    <div class="section-head">
+      <h2>A · SQL Server bağlantısı</h2>
+      <span class="section-owner">DBA</span>
+    </div>
+    <p class="section-intro">
+      Uygulama maskeleme kurallarını bir SQL tablosundan okur. Yalnızca okuma yapar; hiçbir belge verisi
+      veritabanına yazılmaz.
+    </p>
+
+    <div class="questions">
+
+      <article class="question is-blocking">
+        <div class="q-num">01</div>
+        <div class="q-body">
+          <p class="q-ask">SQL sunucusunun DNS adı nedir? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            IP adresi <strong>yeterli değil</strong>. Şifreli (TLS) bağlantıda sunucu adının IP olmasına
+            izin verilmiyor; bu teknik olarak imkânsız. <code>sqlsrv.sirket.local</code> gibi bir ad
+            gerekiyor. Ad çözümlemesi yoksa <code>hosts</code> dosyasına kayıt eklenebilir.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question is-blocking">
+        <div class="q-num">02</div>
+        <div class="q-body">
+          <p class="q-ask">Named instance mı kullanılıyor, portu sabit mi? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            Named instance'lar varsayılan olarak <strong>dinamik port</strong> kullanır ve bu port
+            SQL servisi her yeniden başladığında değişir — uygulama sessizce kopar. SQL Server
+            Configuration Manager'dan sabit port atanabilir mi? Atanacaksa hangi port?
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question is-blocking">
+        <div class="q-num">03</div>
+        <div class="q-body">
+          <p class="q-ask">Kimlik doğrulama Windows Authentication mı olacak, SQL login mi? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            <strong>Windows Authentication tercihimiz.</strong> O zaman uygulama bir domain servis
+            hesabıyla çalışır ve yapılandırma dosyasında hiçbir şifre durmaz. Bu seçilirse:
+            servis hangi hesapla çalışacak? SQL login seçilirse şifre nasıl teslim edilecek?
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">04</div>
+        <div class="q-body">
+          <p class="q-ask">Kural tablosu hangi veritabanında duracak? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            Test ortamında <code>Redakt.dbo.RedaktKurallari</code> kullanıldı; kolonlar:
+            <code>AranacakIfade</code>, <code>YerineDeger</code>, <code>Kategori</code>,
+            <code>Aktif</code>. Aynı şema kullanılacak mı, yoksa mevcut bir tabloya mı bağlanacağız?
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">05</div>
+        <div class="q-body">
+          <p class="q-ask">Sadece o tabloyu okuyabilen ayrı bir kullanıcı açılabilir mi? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            <code>sa</code> yalnızca geliştirme için kullanıldı. Kurulumda yalnızca kural tablosuna
+            <code>SELECT</code> yetkisi olan bir hesap (<code>redakt_reader</code> gibi) istiyoruz —
+            uygulama başka hiçbir şeye erişemesin.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">06</div>
+        <div class="q-body">
+          <p class="q-ask">Kaç kural olacak ve kim yönetecek? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            20.000 kurala kadar test edildi, sorun yok. Kuralları kim ekleyip güncelleyecek —
+            doğrudan SQL üzerinden mi, yoksa bunun için bir yönetim ekranı gerekiyor mu?
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ B ============ -->
+  <section>
+    <div class="section-head">
+      <h2>B · HTTPS ve ağ</h2>
+      <span class="section-owner">Ağ / Sistem</span>
+    </div>
+    <p class="section-intro">
+      Uygulamaya kullanıcılar tarayıcıdan erişecek ve HTTPS zorunlu. Ağınızda hâlihazırda iç
+      sistemler çalıştığı için, sıfırdan bir düzen kurmak yerine mevcut yönteme uymak istiyoruz.
+    </p>
+
+    <div class="questions">
+
+      <article class="question is-blocking">
+        <div class="q-num">07</div>
+        <div class="q-body">
+          <p class="q-ask">Ağdaki mevcut iç sistemler HTTPS'i nasıl çözüyor? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            <strong>En önemli soru bu.</strong> Zaten çalışan bir düzeniniz varsa aynısını kullanırız;
+            sertifika, DNS ve yenileme sorunları kendiliğinden çözülmüş olur. Örnek bir iç sistemin
+            adresi ve sertifikasının nereden geldiği yeterli.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question is-blocking">
+        <div class="q-num">08</div>
+        <div class="q-body">
+          <p class="q-ask">TLS'i sonlandıran mevcut bir ters proxy var mı? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            IIS, nginx, Apache, F5, Traefik gibi. <strong>Varsa en temiz yol budur:</strong> sertifika
+            orada durur, uygulamaya hiç sertifika koymamız gerekmez, yenileme de mevcut süreçle döner.
+            Yoksa sertifikayı doğrudan uygulamaya tanımlayacağız.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question is-blocking">
+        <div class="q-num">09</div>
+        <div class="q-body">
+          <p class="q-ask">Kurum içi sertifika otoritesi (AD Certificate Services) var mı? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            Varsa uygulamanın adına sertifika üretilir ve kullanıcılar uyarı görmez. Yoksa self-signed
+            sertifika üretip <strong>domain policy ile dağıtmanız</strong> gerekir — aksi halde herkes
+            tarayıcıda "güvenli değil" uyarısı alır ve ürüne güven düşer.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question is-blocking">
+        <div class="q-num">10</div>
+        <div class="q-body">
+          <p class="q-ask">Uygulamanın DNS adı ne olacak? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            Kullanıcıların gireceği adres, örneğin <code>redakt.sirket.local</code>. Sertifika bu ada
+            göre üretilecek ve DNS kaydının açılması gerekiyor.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">11</div>
+        <div class="q-body">
+          <p class="q-ask">Sertifika yenilemesini kim ve nasıl yapıyor? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            Sertifikanın süresi dolduğunda uygulama erişilemez hale gelir ve sebebi ilk bakışta
+            anlaşılmaz. Yenileme sorumlusunu ve takvimini şimdiden netleştirelim.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">12</div>
+        <div class="q-body">
+          <p class="q-ask">Güvenlik duvarında hangi izinler gerekiyor? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            İki yön var: (a) Redakt'ın çalışacağı makine <strong>SQL sunucusunun portuna</strong>
+            çıkabilmeli, (b) kullanıcılar Redakt makinesine <strong>443</strong> üzerinden
+            erişebilmeli. İkisi de açık mı, kural açılması gerekiyor mu?
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ C ============ -->
+  <section>
+    <div class="section-head">
+      <h2>C · Sunucu ve kurulum</h2>
+      <span class="section-owner">Sistem</span>
+    </div>
+    <p class="section-intro">
+      Uygulama tek bir Windows servisi olarak çalışır. Kullanıcı bilgisayarlarına hiçbir kurulum
+      yapılmaz.
+    </p>
+
+    <div class="questions">
+
+      <article class="question is-blocking">
+        <div class="q-num">13</div>
+        <div class="q-body">
+          <p class="q-ask">Hangi makinede çalışacak? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            Mevcut bir sunucu mu, yeni bir VM mi açılacak? Windows Server sürümü nedir?
+            Disk ihtiyacı <strong>yaklaşık 250 MB</strong> (dil modeli dahil), RAM ihtiyacı düşüktür.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question is-blocking">
+        <div class="q-num">14</div>
+        <div class="q-body">
+          <p class="q-ask">O makinenin internet erişimi var mı? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            Yoksa sorun değil, ama paketi ona göre hazırlarız: her şey (çalışma zamanı, sürücüler,
+            dil modeli) tek klasörde gelir, kurulum sırasında hiçbir şey indirilmez.
+            <strong>Bunu önceden bilmemiz gerekiyor.</strong>
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">15</div>
+        <div class="q-body">
+          <p class="q-ask">Docker kullanıyor musunuz? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            Kullanıyorsanız container olarak vermek daha temiz olur: güncellemesi kolay, sisteme
+            hiçbir şey bulaştırmaz. Kullanmıyorsanız klasik Windows servisi olarak kurarız.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">16</div>
+        <div class="q-body">
+          <p class="q-ask">Güncellemeleri kim yapacak, uzaktan erişimimiz olacak mı? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            Yeni sürüm çıktığında dosyaların değiştirilip servisin yeniden başlatılması gerekir.
+            Bunu siz mi yapacaksınız, yoksa bize erişim mi verilecek?
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">17</div>
+        <div class="q-body">
+          <p class="q-ask">Servisin log kayıtları nereye yazılsın? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            Windows Event Log mu, dosya mı, yoksa merkezi bir log sisteminiz mi var?
+            Not: belge içerikleri <strong>hiçbir zaman</strong> loglanmaz.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ D ============ -->
+  <section>
+    <div class="section-head">
+      <h2>D · Kullanıcılar</h2>
+      <span class="section-owner">İş birimi / Sistem</span>
+    </div>
+    <p class="section-intro">
+      Belgeler kullanıcının kendi tarayıcısında işlenir — sunucuya yüklenmez. Bu yüzden kullanıcı
+      bilgisayarlarının gücü doğrudan hıza yansır.
+    </p>
+
+    <div class="questions">
+
+      <article class="question">
+        <div class="q-num">18</div>
+        <div class="q-body">
+          <p class="q-ask">Kaç kişi kullanacak, aynı anda kaç kişi? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            Sunucu yükü düşük olacak çünkü ağır iş kullanıcı tarafında yapılıyor. Yine de
+            makine kapasitesini buna göre belirleyelim.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question is-blocking">
+        <div class="q-num">19</div>
+        <div class="q-body">
+          <p class="q-ask">Kullanıcı bilgisayarlarının özellikleri nedir? <span class="tag blocking">Bloke eden</span></p>
+          <p class="q-why">
+            <strong>Beklenenden önemli bir soru.</strong> İsim tanıma yapan dil modeli (yaklaşık 150 MB)
+            kullanıcının tarayıcısında çalışıyor — veri dışarı çıkmasın diye böyle tasarlandı.
+            Zayıf ofis bilgisayarlarında tarama yavaşlar. Tipik bir kullanıcı makinesinin
+            RAM ve işlemcisi nedir?
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">20</div>
+        <div class="q-body">
+          <p class="q-ask">Hangi tarayıcı kullanılıyor ve sürümü güncel mi? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            Güncel Chrome veya Edge gerekiyor (WebAssembly desteği için).
+            <strong>Internet Explorer ve eski Edge çalışmaz.</strong> Tarayıcı sürümleri merkezi olarak
+            yönetiliyor mu?
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+      <article class="question">
+        <div class="q-num">21</div>
+        <div class="q-body">
+          <p class="q-ask">Kullanıcı girişi ve denetim kaydı gerekiyor mu? <span class="tag standard">Önemli</span></p>
+          <p class="q-why">
+            Şu an giriş yok — ağa erişen herkes kullanabilir. KVKK denetimi için "kim, ne zaman,
+            hangi belgeyi maskeledi" kaydı isteniyorsa kullanıcı girişi (AD/LDAP) eklememiz gerekir.
+            Bu ek bir geliştirme kalemidir.
+          </p>
+          <div class="answer">Cevap</div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <div class="closing">
+    <h2>Cevaplanması en acil dört soru</h2>
+    <p>
+      Diğerleri kurulum sırasında netleşebilir, ancak şu dördü olmadan plan yapılamıyor:
+      <strong>1</strong> (SQL'in DNS adı), <strong>3</strong> (kimlik doğrulama yöntemi),
+      <strong>7</strong> (mevcut HTTPS düzeni) ve <strong>14</strong> (internet erişimi).
+    </p>
+    <p>
+      Bu dördü geldiğinde kurulum paketini hazırlamaya başlayabiliriz; kalan sorular paketin
+      son halini şekillendirir.
+    </p>
+  </div>
+
+  <p class="footer-note">
+    Belgeler kullanıcının tarayıcısından çıkmaz, hiçbir dış servise veri gönderilmez.
+    Sunucu yalnızca kural listesini okumak için SQL'e bağlanır.
+  </p>
+
+</div>
+</body>
+</html>

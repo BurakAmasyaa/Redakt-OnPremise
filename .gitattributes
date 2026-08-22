@@ -1,0 +1,5 @@
+*.onnx binary
+*.onnx_data binary
+*.wasm binary
+*.docx binary
+*.xlsx binary
