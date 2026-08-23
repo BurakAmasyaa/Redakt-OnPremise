@@ -1,81 +1,241 @@
-# Redakt
+# Redakt On-Premise
 
-Redakt, `.docx`, `.xlsx`, `.pdf` ve UTF-8 `.txt` belgelerindeki hassas bilgileri tamamen tarayıcı içinde
-bulup maskeleyen statik bir web uygulamasıdır. Dosya hiçbir API'ye veya sunucuya
-gönderilmez; regex, doğrulama algoritmaları ve NER modeli yerel olarak çalışır.
+Belgelerdeki hassas bilgileri bulup maskeleyen, **şirket ağı içinde çalışan** bir uygulama.
+Maskeleme kurallarını şirketin kendi SQL Server veritabanından okur.
 
-Kapsam:
+Amaç, çalışanların belgeleri dış yapay zekâ servislerine göndermek zorunda kalmadan
+temizleyebilmesidir. **Belge hiçbir zaman kullanıcının tarayıcısından çıkmaz.**
 
-- E-posta
-- Telefon
-- IBAN (mod-97 doğrulaması)
-- T.C. Kimlik No (10. ve 11. hane checksum doğrulaması)
-- Kredi kartı (Luhn doğrulaması)
-- Kişi ve kurum/şirket adı (Transformers.js + yerel ONNX NER)
+Bu depo, kamuya açık [Redakt](https://redakt.com.tr)'ın şirket içi türevidir.
+Farkı: kurallar Excel yerine SQL'den gelir, pazarlama sayfaları yoktur ve tek bir
+Windows sunucuya kurulacak biçimde paketlenir.
 
-DOCX dosyaları JSZip ile açılır; metin değişimleri `word/document.xml` içindeki `w:t`
-düğümlerinde yapılır. XLSX dosyaları SheetJS ile işlenir. DOCX `word/media` ve XLSX
-`xl/media` altındaki PNG/JPEG/WebP görseller yerel OCR ile taranır; seçilen bulguların
-OCR kutuları doğrudan ilgili medya görselinde maskelenir. Kişi ve kurum
-adları, q4 nicemlenmiş `akdeniz27/bert-base-turkish-cased-ner` modeliyle bağlamsal
-olarak bulunur; statik isim/kurum sözlüğü kullanılmaz. NER bulguları model güven
-puanıyla birlikte **muhtemel** olarak gösterilir ve kullanıcı onayı bekler.
+---
 
-Model dosyaları `public/`, ONNX Runtime Web varlıkları `src/vendor/` altında
-paketlenmiştir. `env.allowRemoteModels = false` olduğu için çalışma anında Hugging
-Face'e veya başka bir dış servise istek atılmaz.
+## En önemli şey: veri nereye gidiyor
 
-PDF dosyaları PDF.js ile önce yerel metin katmanından okunur. Metin katmanı olmayan
-taranmış/görsel sayfalarda yalnızca o sayfa Tesseract.js ile yerel OCR'a alınır.
-Türkçe ve İngilizce dil dosyaları uygulamanın statik asset'leri arasındadır; aynı
-worker sayfalar arasında yeniden kullanılır ve sayfalar sırayla işlenir. PDF çıktısı,
-hassas kaynak metnin veya pikselin geri çıkarılamaması için sayfa sayfa düzleştirilip
-yeni bir PDF olarak oluşturulur; bu nedenle çıktıdaki metin seçilebilir değildir.
+Bunu yanlış anlamak ürünün varlık sebebini ortadan kaldırır.
 
-TXT dosyaları ortak detection pipeline'ında işlenir; UTF-8 BOM ve orijinal LF/CRLF
-satır sonları export sırasında korunur. Desteklenmeyen legacy encoding'ler açık bir
-hata mesajıyla reddedilir.
+```
+Kullanıcının tarayıcısı                    Şirket sunucusu           Şirket SQL
+─────────────────────────                  ───────────────           ──────────
+  Belge açılır          ─────── hayır ───▶  (belge asla gelmez)
+  Metin çıkarılır
+  Regex + NER çalışır
+  Kurallar uygulanır    ◀────── kural listesi ──── /api/rules ◀───── SELECT
+  Maskelenmiş dosya
+  indirilir
+```
 
-Büyük tablolarda NER tokenizasyonu ve ONNX inference ana thread dışında özel bir
-Web Worker'da çalışır. Kayıtlar profile göre 100-200 satırlık gruplar halinde
-işlenir ve ilerleme kayıt sayısıyla gösterilir. 1.000 satır üzerindeki dosyalarda
-önceden uyarı gösterilir; binlerce bulgu ise sabit sayıda DOM düğümü kullanan
-windowed liste ile sunulur.
+Sunucu iki iş yapar: **uygulamayı sunmak** ve **kural listesini okumak**.
+Belge içeriği ne sunucuya gider, ne SQL'e yazılır, ne log'a düşer.
 
-Dosya seçici çoklu seçimi ve klasör yüklemeyi destekler. Dosyalar kaynak kullanımını
-sınırlamak için kuyrukta yalnızca birer birer işlenir; her satır sırada, işleniyor,
-tamamlandı veya hata durumunu gösterir. Büyük dosya ilerlemesi tahmini faz
-ağırlıklarından değil doğrudan worker batch sayacından hesaplanır. Kalan süre,
-son beş batch'in ölçülen hızına göre güncellenir.
+Bu sınır kodda gevşetilmemesi gereken bir kuraldır ve testle korunur
+([tests/privacy.test.js](tests/privacy.test.js)): belgeyi işleyen 14 modülde ağ
+erişimi ve kalıcı depolama yasaktır, ağ erişimi yalnızca
+[src/rule-source.js](src/rule-source.js) içinde bulunabilir ve orada da tek
+yönlüdür — gövdesiz `GET`, yalnızca `/api/rules`.
 
-Özel kural listeleri başlıksız bir Excel dosyasının ilk sayfasından içe aktarılır:
-A sütunu aranacak ifadeyi, B sütunu birebir kullanılacak yeni değeri taşır. Bu
-kurallar kullanıcı isteğiyle `localStorage` içinde yalnızca ilgili tarayıcıda
-saklanır. Eşleştirme büyük/küçük harfe duyarsızdır; Türkçe karakter varyantlarını
-eşdeğer sayar ve kısa ifadelerde 1, uzun ifadelerde 2 karakterlik yazım hatasını
-tolere eder. Sonuçlar NER'den bağımsız olarak **kesin** grubunda gösterilir.
+---
 
-## Çalıştırma
+## Ne bulur
+
+Üç bağımsız katman çalışır:
+
+| Katman | Bulduğu | Nasıl |
+|---|---|---|
+| **Kesin** | E-posta, IBAN, T.C. Kimlik No, kredi kartı | Regex + doğrulama (IBAN mod-97, TCKN 10./11. hane, kart Luhn) |
+| **Muhtemel** | Kişi adı, kurum/şirket, adres-konum, telefon | Yerel Türkçe BERT NER modeli, güven puanıyla |
+| **Kurumsal** | Şirkete özel isimler, proje kodları, müşteri unvanları | SQL'deki kural tablosu |
+
+Bulguların tamamı seçili gelir. NER bulguları ayrı bir **"Muhtemel"** grubunda
+model güven puanıyla listelenir — model yanılabildiği için kullanıcı bunları
+gözden geçirip seçimini kaldırabilir.
+
+Desteklenen dosyalar: `.docx`, `.xlsx`, `.pdf`, `.txt`, `.jpg`, `.png`.
+Taranmış PDF sayfaları ve Office içine gömülü görseller yerel OCR ile
+(Türkçe + İngilizce) okunur.
+
+Üç tarama seviyesi var — Hızlı, Dengeli, Kapsamlı — hız ve kapsam arasında denge kurar.
+
+---
+
+## Kurulum
+
+Adım adım anlatım: **[server/scripts/KURULUM.md](server/scripts/KURULUM.md)**
+
+Özet: paket kendi kendine yeter (Node çalışma zamanı, dil modeli, sürücüler içinde),
+hedef makinede **internet gerekmez**. Kurulum betiği yapılandırmayı hazırlar,
+klasör izinlerini kısıtlar, açılışta başlayan görevi tanımlar ve güvenlik duvarı
+kuralını açar.
+
+Paketi üretmek için:
 
 ```bash
 npm install
-npm run dev
+npm run package
 ```
 
-Üretim için tamamen statik çıktı:
+Çıktı `package/` klasörüne yazılır (~209 MB; büyük kısmı dil modeli ve OCR dosyaları).
+Windows çalışma zamanını da eklemek için `node server/build-package.mjs --fetch-node`.
+
+---
+
+## Kural yönetimi
+
+Kurallar uygulamadan değil, **doğrudan SQL'den** yönetilir. Varsayılan tablo
+`dbo.RedaktKurallari`:
+
+| Kolon | Anlamı |
+|---|---|
+| `Id` | Anahtar |
+| `AranacakIfade` | Belgede aranacak ifade |
+| `YerineDeger` | Yerine yazılacak değer, ör. `[SIRKET_1]` |
+| `Kategori` | Gruplama (Kisi, Sirket, Proje…) |
+| `Aktif` | `0` yapılan kural uygulanmaz; silmeye gerek yok |
+| `Notlar` | Serbest açıklama |
+
+Uygulama yalnızca `Aktif = 1` olan satırları okur.
+
+Yeni kural eklendiğinde: sunucu değişikliği en geç bir dakika içinde görür
+(`RULES_CACHE_TTL_MS`), ancak tarayıcı kural listesini **sayfa açılışında** çeker.
+Sayfası zaten açık olan kullanıcı için yeni kural, sayfayı yenilediğinde veya
+kural panelindeki **"Yenile"** düğmesine bastığında etkili olur.
+
+**Eşleştirme büyük/küçük harfe duyarsızdır**, Türkçe karakter varyantlarını eşdeğer
+sayar (`Şen` ≈ `Sen`) ve yazım hatası tolere eder: kısa ifadelerde 1, uzun
+ifadelerde 2 karakter. Yani `ALFA-2026` kuralı `ALFA-2027`'yi de yakalayabilir —
+kod adları gibi birebir eşleşmesi gereken kurallarda buna dikkat edin.
+
+Aynı ifade için farklı değer taşıyan iki kural varsa sunucu bunu log'a uyarı
+olarak yazar ve kullanıcıya bildirir.
+
+---
+
+## Bir şeyler ters giderse ne olur
+
+Redaksiyon aracında en tehlikeli arıza sessiz olanıdır: kullanıcı belgeyi
+indirir, maskelendiğini sanır, oysa isimler yerinde durmaktadır. İki koruma var:
+
+- **SQL'e ulaşılamazsa** kullanıcı taramadan önce açık bir onay ekranı görür:
+  *"Kurumsal kurallar yüklenemedi. Yine de devam edilsin mi?"* Sunucu son bilinen
+  kural listesini önbellekten sunarsa da bunu "eski kopya" olarak işaretler.
+- **NER modeli çalışmazsa** inceleme ekranında kalıcı bir uyarı belirir:
+  *"Kişi ve kurum adları aranamadı."* Teknik neden de parantez içinde yazılır,
+  böylece kurulumu yapan kişi sorunu teşhis edebilir.
+
+---
+
+## Geliştirme
 
 ```bash
-npm run build
+npm install          # bağımlılıklar
+npm run dev          # tarayıcı uygulaması (vite, 127.0.0.1:5173)
+npm test             # 107 test
+npm run build        # statik çıktı → dist/
+npm run package      # kurulum paketi → package/
 ```
 
-Çıktı `dist/` klasörüne yazılır ve herhangi bir statik dosya sunucusunda çalışır.
-
-## Test
+Sunucuyu çalıştırmak için:
 
 ```bash
-npm test
+cp server/.env.example server/.env    # doldurun
+cd server && npm install
+npm run check                          # bağlantıyı ve tabloyu doğrular
+npm start                              # uygulama + API, varsayılan :8080
 ```
 
-Faz 2 tarayıcı/doğruluk testi için gerçek kişi ve kurum örneklerini içeren
-`test-files/redakt-faz2-ner-test.docx` kullanılır. Aday model karşılaştırması ve
-bilinen kaçırmalar `docs/faz2-model-degerlendirme.md` dosyasında kayıtlıdır.
+`npm run check` kurulum sorunlarını sırayla eler: ağ erişimi, SQL Browser, port,
+TLS, kimlik doğrulama, tablo ve yetkiler. Şirkette ilk bağlantıda bununla başlayın.
+
+### Yapı
+
+```
+src/          Tarayıcı uygulaması (framework yok, vanilla + Vite)
+  pipeline.js       Belge adaptörleri arayüzü
+  office.js         DOCX/XLSX · pdf.js · txt.js · image.js
+  pii.js            Regex + doğrulama katmanı
+  ner.js            Yerel ONNX NER modeli
+  ner-worker.js     NER'i ayrı thread'de çalıştırır
+  custom-rules.js   Kural eşleştirme motoru (ters indeks)
+  rule-source.js    /api/rules istemcisi — TEK ağ erişim noktası
+  main.js           Arayüz ve akış
+
+server/       Şirket içi servis
+  src/config.js         Yapılandırma, iki kimlik modu
+  src/db.js             SQL bağlantı havuzu
+  src/rules-repository.js  Kural okuma + önbellek + değişiklik tespiti
+  src/server.js         HTTP: statik + /api/rules + /api/health
+  src/logger.js         Kayıt altyapısı
+  src/check.js          Kurulum doğrulama aracı
+  scripts/              kurulum.ps1 ve KURULUM.md
+
+public/models/   Türkçe NER modeli (~150 MB)
+public/ocr/      Tesseract dil dosyaları (~31 MB)
+tests/           107 test
+```
+
+### Kural eşleştirme motoru
+
+Binlerce kuralı kaldırabilmesi için motor ters indeks kullanır: belge bir kez
+taranır, her kelime için aday kurallar hash aramasıyla bulunur. Bulanık
+eşleştirmeyi koruyabilmek için SymSpell silme-varyantı yöntemi kullanılır.
+
+Ölçülen: 20.000 kural × 5.000 birim ≈ 13 saniye, 1.000 kural × 1.000 birim ≈ 0,3 saniye.
+Önceki "her kural için belgeyi baştan tara" yaklaşımı aynı 1.000 × 1.000 işini
+29 saniyede yapıyordu; binlerce kuralda kullanılamaz hale geliyordu.
+
+Motoru değiştirirseniz [tests/rule-index.test.js](tests/rule-index.test.js)
+sonuçları kaba-kuvvet referans implementasyonla karşılaştırır — hız uğruna
+doğruluktan ödün verilmediğini garanti eder.
+
+---
+
+## Bilinmesi gereken kısıtlar
+
+Bunlar tasarım gereği veya ortamdan kaynaklanır; şaşırmamak için:
+
+**Şifreli SQL bağlantısında IP adresi kullanılamaz.** TLS, sunucu adının IP
+olmasına izin vermez. `SQL_HOST` bir DNS adı olmalıdır. Ad çözümlemesi yoksa
+`hosts` dosyasına kayıt ekleyin. Yapılandırma bunu erken ve anlaşılır bir hatayla
+yakalar.
+
+**Named instance portu dinamik olabilir.** SQL servisi her yeniden başladığında
+port değişir ve uygulama sessizce kopar. Sabit port atayın veya `SQL_INSTANCE`
+kullanın (o da SQL Browser'ın UDP 1434'ten erişilebilir olmasını gerektirir).
+
+**Dil modeli kullanıcının tarayıcısında çalışır.** Sunucu yükü düşüktür ama
+tarama hızı kullanıcının bilgisayarına bağlıdır. Büyük belgelerde dakikalar
+sürebilir.
+
+**Model dosyaları GitHub'ın dosya sınırına yakın.** `model_q4.onnx_data` 94 MB;
+sert sınır 100 MB. Model büyürse Git LFS gerekir.
+
+**Tarayıcı gereksinimi:** güncel Chrome veya Edge. WebAssembly ve ES2020
+gerekiyor; Internet Explorer ve eski Edge çalışmaz.
+
+---
+
+## Bilinen açık konular
+
+- **Çok çekirdekli NER kapalı.** `crossOriginIsolated` false olduğu için ONNX tek
+  iş parçacığında çalışıyor; çok çekirdekli makinede tek çekirdek kullanılıyor.
+  `Cross-Origin-Embedder-Policy` başlığı eklenince izolasyon açılıyor **ama NER hiç
+  bulgu üretmiyor**; nedeni henüz bulunamadı. Bu yüzden başlık eklenmedi.
+  Çözülürse büyük belgelerde 3-6× hızlanma bekleniyor.
+- **Kullanıcı girişi ve denetim logu yok.** Şu an ağa erişen herkes kullanabilir.
+  KVKK denetimi için "kim, ne zaman, hangi belgeyi maskeledi" kaydı gerekiyorsa
+  kimlik doğrulama (tercihen Windows Integrated Authentication) eklenmelidir.
+- **HTTPS yapılandırması eklenmedi.** Kurumun mevcut düzenine göre ya ters proxy
+  arkasında çalışacak ya da sertifika doğrudan servise tanımlanacak.
+- **`kurulum.ps1` gerçek Windows'ta denenmedi.** İlk kurulumda küçük düzeltme
+  gerekebilir.
+
+---
+
+## Lisans ve model
+
+NER modeli `akdeniz27/bert-base-turkish-cased-ner` temel alınarak q4 nicemlenmiş
+ONNX biçimine dönüştürülmüştür (kaynak model kartındaki beyana göre MIT).
+Model ve OCR dosyaları uygulama ile aynı kaynaktan yüklenir; çalışma anında
+Hugging Face'e veya başka bir dış servise istek atılmaz (`env.allowRemoteModels = false`).
