@@ -28,7 +28,11 @@ export function detectNamedEntitiesInWorker(texts, { profile = "balanced", signa
       return;
     }
     signal?.addEventListener("abort", cancel, { once: true });
-    worker.addEventListener("error", () => finish(reject, new Error("Yerel kişi/kurum worker'ı başlatılamadı.")));
+    worker.addEventListener("error", (event) => {
+      const error = new Error("Yerel kişi/kurum worker'ı başlatılamadı.");
+      error.detail = String(event?.message || "").slice(0, 300);
+      finish(reject, error);
+    });
     worker.addEventListener("message", (event) => {
       const message = event.data || {};
       if (message.type === "batch-progress") onProgress?.({ phase: "batch", ...message });
@@ -37,6 +41,7 @@ export function detectNamedEntitiesInWorker(texts, { profile = "balanced", signa
       else if (message.type === "error") {
         const error = new Error(message.message || "Yerel kişi/kurum modeli çalıştırılamadı.");
         error.name = message.name || "Error";
+        error.detail = message.detail ? String(message.detail).slice(0, 300) : null;
         finish(reject, error);
       }
     });

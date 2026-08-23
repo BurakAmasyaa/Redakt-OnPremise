@@ -49,10 +49,13 @@ self.addEventListener("message", async (event) => {
     }
     self.postMessage({ type: "complete", findings: mergeNerBatches(batches) });
   } catch (error) {
+    // Gerçek hata metni kurulum ve sorun gidermede tek ipucudur; kaybedilmemeli.
+    // Bu metin çalışma zamanından gelir, belge içeriği taşımaz.
     self.postMessage({
       type: "error",
       name: error?.name || "Error",
       message: error?.name === "AbortError" ? "İşlem iptal edildi." : "Yerel kişi/kurum modeli çalıştırılamadı.",
+      detail: error?.name === "AbortError" ? null : String(error?.message || error || "").slice(0, 300),
     });
   } finally {
     if (activeController === controller) activeController = null;

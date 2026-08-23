@@ -76,6 +76,7 @@ const elements = Object.fromEntries(
     "processing-progress", "processing-units", "progress-bar", "processing-percent", "processing-eta", "processing-cancel",
     "batch-back", "batch-title", "batch-cancel-all", "batch-download-all", "batch-subtitle", "batch-instruction", "batch-summary-tab", "batch-files-tab",
     "batch-summary-view", "batch-files-view", "batch-total", "aggregate-grid", "batch-file-list", "done-batch-back",
+    "scan-warning", "scan-warning-title", "scan-warning-detail",
     "confirm-layer", "confirm-dismiss", "confirm-accept", "confirm-eyebrow", "confirm-title", "confirm-detail",
     "fatal-error-layer", "fatal-error-reload",
   ].map((id) => [id.replace(/-([a-z])/g, (_, character) => character.toUpperCase()), document.getElementById(id)])
@@ -740,7 +741,12 @@ async function handleFile(file, { backgroundQueue = false } = {}) {
       }
     } catch (error) {
       if (error?.name === "AbortError") throw error;
-      nerWarning = "Kişi/kurum modeli çalıştırılamadı; doğrulanabilir Faz 1 bulguları yine gösteriliyor.";
+      // Kişi/kurum tespiti çalışmadıysa belgede isimler maskelenmeden kalır.
+      // Kullanıcı bunu indirmeden önce görmeli; geçici bir bildirim yetmez.
+      nerWarning = {
+        title: "Kişi ve kurum adları aranamadı.",
+        detail: `Bu belgede isimler maskelenmemiş olabilir; yalnızca e-posta, telefon, IBAN, T.C. kimlik ve kart numaraları ile kurumsal kurallar uygulandı.${error?.detail ? ` (Teknik ayrıntı: ${error.detail})` : ""}`,
+      };
     }
     const combinedFindings = [...customFindings, ...importedFindings, ...findings, ...namedEntities];
     tracker.start("reviewPreparation", 1);
@@ -771,9 +777,16 @@ async function handleFile(file, { backgroundQueue = false } = {}) {
     setProcessing(false);
     document.title = DEFAULT_DOCUMENT_TITLE;
     finishOperation("scan", controller);
-    if (nerWarning) showError(nerWarning);
+    showScanWarning(nerWarning);
   }
   return succeeded;
+}
+
+function showScanWarning(warning) {
+  elements.scanWarning.hidden = !warning;
+  if (!warning) return;
+  elements.scanWarningTitle.textContent = warning.title;
+  elements.scanWarningDetail.textContent = warning.detail || "";
 }
 
 function mappingContents(findings) {
