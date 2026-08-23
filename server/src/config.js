@@ -2,11 +2,23 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePassword } from "./secret.js";
 
 const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-export function loadEnvFile(file = path.join(serverRoot, ".env")) {
-  if (fs.existsSync(file)) process.loadEnvFile(file);
+// Geliştirmede server/.env, kurulum paketinde ise app/ yanındaki config/.env
+// kullanılır. REDAKT_ENV_FILE ile açıkça da verilebilir.
+export function loadEnvFile(file = process.env.REDAKT_ENV_FILE) {
+  const candidates = file
+    ? [file]
+    : [path.join(serverRoot, ".env"), path.resolve(serverRoot, "..", "config", ".env")];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      process.loadEnvFile(candidate);
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function required(name) {
@@ -15,26 +27,20 @@ function required(name) {
   return value;
 }
 
-function buildAuthentication() {
+function buildAuthentication(logger) {
   const mode = (process.env.SQL_AUTH || "sql").toLowerCase();
+  const password = resolvePassword(process.env, { logger });
   if (mode === "windows" || mode === "ntlm") {
     return {
       type: "ntlm",
-      options: {
-        userName: required("SQL_USER"),
-        password: required("SQL_PASSWORD"),
-        domain: required("SQL_DOMAIN"),
-      },
+      options: { userName: required("SQL_USER"), password, domain: required("SQL_DOMAIN") },
     };
   }
   if (mode !== "sql") throw new Error(`Bilinmeyen SQL_AUTH değeri: ${mode}. Geçerli: sql, windows.`);
-  return {
-    type: "default",
-    options: { userName: required("SQL_USER"), password: required("SQL_PASSWORD") },
-  };
+  return { type: "default", options: { userName: required("SQL_USER"), password } };
 }
 
-export function loadDatabaseConfig() {
+export function loadDatabaseConfig({ logger } = {}) {
   const host = required("SQL_HOST");
   const encrypt = process.env.SQL_ENCRYPT !== "false";
   const instanceName = process.env.SQL_INSTANCE || undefined;
@@ -55,7 +61,7 @@ export function loadDatabaseConfig() {
     server: host,
     port,
     database: required("SQL_DATABASE"),
-    authentication: buildAuthentication(),
+    authentication: buildAuthentication(logger),
     options: {
       encrypt,
       instanceName,
@@ -75,5 +81,13 @@ export function loadServerConfig() {
     staticRoot: path.resolve(serverRoot, process.env.STATIC_ROOT || "../dist"),
     rulesTable: process.env.SQL_RULES_TABLE || "dbo.RedaktKurallari",
     cacheTtlMs: Number(process.env.RULES_CACHE_TTL_MS || 60000),
+  };
+}
+
+export function loadLogConfig() {
+  return {
+    directory: path.resolve(serverRoot, process.env.LOG_DIR || "../logs"),
+    level: (process.env.LOG_LEVEL || "info").toLowerCase(),
+    retentionDays: Number(process.env.LOG_RETENTION_DAYS || 30),
   };
 }

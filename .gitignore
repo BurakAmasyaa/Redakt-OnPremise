@@ -12,3 +12,7 @@ config.local.json
 outputs/
 screenshots/
 .qa/
+
+# Kurulum paketi (build çıktısı)
+package/
+logs/

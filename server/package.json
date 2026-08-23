@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "check": "node src/check.js"
+    "check": "node src/check.js",
+    "encrypt-password": "node src/encrypt-password.js"
   },
   "dependencies": {
     "mssql": "^12.7.0"
