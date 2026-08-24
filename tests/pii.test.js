@@ -40,10 +40,10 @@ test("telefon tespiti yalnız tanınan Türkiye alan kodu ve telefon yapısını
   }
 });
 
-test("policy PDF regresyonundaki büyük-küçük harfli e-postayı kesin bulur", () => {
-  const findings = aggregateFindings(["Contact: onebehavior@JTI.com"]);
+test("alan adında büyük harf bulunan e-postayı kesin bulur", () => {
+  const findings = aggregateFindings(["Contact: iletisim@ORNEK.com"]);
   assert.deepEqual(
     findings.map(({ category, value, confidence }) => ({ category, value, confidence })),
-    [{ category: "email", value: "onebehavior@JTI.com", confidence: "exact" }]
+    [{ category: "email", value: "iletisim@ORNEK.com", confidence: "exact" }]
   );
 });
