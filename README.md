@@ -126,12 +126,48 @@ indirir, maskelendiğini sanır, oysa isimler yerinde durmaktadır. İki koruma 
 
 ---
 
+## İşletim ve izleme
+
+İki ayrı uç nokta var ve karıştırılmamalı:
+
+| Uç | Anlamı | SQL kapalıyken |
+|---|---|---|
+| `GET /api/health` | **Canlılık** — süreç ayakta mı? | `200` |
+| `GET /api/ready` | **Hazırlık** — iş görebiliyor mu? | `503` |
+
+Ayrım önemli: SQL sorunu servisi yeniden başlatarak çözülmez. İzleme sisteminiz
+*"servisi yeniden başlat"* kararını `/api/health`'e, *"yöneticiye haber ver"*
+kararını `/api/ready`'ye bağlamalıdır.
+
+`/api/health` ayrıca çalışan sürümü, çalışma süresini, istek ve hata sayaçlarını,
+SQL bağlantı durumunu, kural önbelleğinin yaşını ve bellek kullanımını döndürür.
+Prometheus yerine düz JSON tercih edildi; kurumsal Windows ortamlarında JSON
+okuyabilen izleme aracı (PRTG, Zabbix, SCOM) daha yaygındır.
+
+**Sürüm bilgisi.** Destek çağrısında ilk sorulan şeydir. Paket üretilirken sürüm,
+derleme zamanı ve git commit'i gömülür; `/api/health` ve açılış log'u bunu bildirir.
+
+**İstek kimliği.** Her yanıt `X-Request-Id` başlığı taşır ve hata gövdelerinde de
+döner. Kullanıcı "hata aldım" dediğinde bu kimlikle log'daki tam kaydı bulursunuz.
+
+**Log gürültüsü.** SQL erişilemez hale geldiğinde tek bir kayıt yazılır, geri
+geldiğinde bir kayıt daha. İzleme sistemi 30 saniyede bir yoklasa da log dolmaz.
+
+**Disk koruması.** Log dosyaları hem günlük hem boyut sınırına göre bölünür
+(`LOG_MAX_FILE_MB`) ve klasörün toplam boyutu aşılırsa en eski dosyalar silinir
+(`LOG_MAX_TOTAL_MB`). Bir hata döngüsü diski dolduramaz. Yazılmakta olan dosya
+temizlikte hiçbir zaman silinmez.
+
+> Şu an kimlik doğrulama olmadığı için `/api/health` ağdaki herkese açıktır ve
+> SQL hata mesajı sunucu adını içerebilir. Giriş eklendiğinde bu uçların da
+> korunması gerekir.
+
 ## Geliştirme
 
 ```bash
 npm install          # bağımlılıklar
 npm run dev          # tarayıcı uygulaması (vite, 127.0.0.1:5173)
-npm test             # 107 test
+npm test             # 116 test
 npm run build        # statik çıktı → dist/
 npm run package      # kurulum paketi → package/
 ```
@@ -166,13 +202,16 @@ server/       Şirket içi servis
   src/db.js             SQL bağlantı havuzu
   src/rules-repository.js  Kural okuma + önbellek + değişiklik tespiti
   src/server.js         HTTP: statik + /api/rules + /api/health
-  src/logger.js         Kayıt altyapısı
+  src/logger.js         Kayıt altyapısı (döndürme + disk sınırı)
+  src/diagnostics.js    Sayaçlar ve SQL durum takibi
+  src/build-info.js     Sürüm/commit bilgisi
+  src/secret.js         DPAPI ile şifrelenmiş parola
   src/check.js          Kurulum doğrulama aracı
   scripts/              kurulum.ps1 ve KURULUM.md
 
 public/models/   Türkçe NER modeli (~150 MB)
 public/ocr/      Tesseract dil dosyaları (~31 MB)
-tests/           107 test
+tests/           116 test
 ```
 
 ### Kural eşleştirme motoru

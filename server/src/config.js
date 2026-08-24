@@ -89,5 +89,8 @@ export function loadLogConfig() {
     directory: path.resolve(serverRoot, process.env.LOG_DIR || "../logs"),
     level: (process.env.LOG_LEVEL || "info").toLowerCase(),
     retentionDays: Number(process.env.LOG_RETENTION_DAYS || 30),
+    // Hata döngüsü diski doldurmasın: tek dosya ve toplam klasör sınırı.
+    maxFileBytes: Number(process.env.LOG_MAX_FILE_MB || 32) * 1024 * 1024,
+    maxTotalBytes: Number(process.env.LOG_MAX_TOTAL_MB || 512) * 1024 * 1024,
   };
 }

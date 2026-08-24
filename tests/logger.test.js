@@ -105,3 +105,54 @@ test("hata nesnesi okunabilir biçimde yazılır", async () => {
 
   assert.match(readLog(directory), /error=TypeError: baglanti reddedildi/u);
 });
+
+test("dosya boyut sınırı aşılınca aynı gün içinde yeni parçaya geçer", async () => {
+  const directory = tempDirectory();
+  const logger = createLogger({ directory, console: false, maxFileBytes: 400 });
+  for (let index = 0; index < 20; index += 1) logger.info(`kayit ${index}`, { dolgu: "y".repeat(60) });
+  logger.close();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const files = fs.readdirSync(directory).sort();
+  assert.ok(files.length > 1, `parçalanma olmadı: ${files.join(", ")}`);
+  assert.ok(
+    files.some((name) => /^redakt-\d{4}-\d{2}-\d{2}\.1\.log$/u.test(name)),
+    `sıralı parça üretilmedi: ${files.join(", ")}`,
+  );
+  // Hiçbir parça sınırı belirgin biçimde aşmamalı.
+  for (const name of files) {
+    assert.ok(fs.statSync(path.join(directory, name)).size <= 600, `${name} sınırı aştı`);
+  }
+});
+
+test("toplam boyut sınırı aşılınca en eski dosyalar silinir", async () => {
+  const directory = tempDirectory();
+  // Yazılmakta olan dosya dışında iki eski parça bırak.
+  for (const [name, age] of [["redakt-2026-08-01.log", 3], ["redakt-2026-08-02.log", 2]]) {
+    const file = path.join(directory, name);
+    fs.writeFileSync(file, "z".repeat(5000));
+    const when = new Date(Date.now() - age * 86_400_000);
+    fs.utimesSync(file, when, when);
+  }
+
+  const logger = createLogger({ directory, console: false, retentionDays: 0, maxTotalBytes: 6000 });
+  logger.info("yeni kayit");
+  logger.close();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const kalan = fs.readdirSync(directory).sort();
+  assert.equal(kalan.includes("redakt-2026-08-01.log"), false, "en eski dosya silinmedi");
+  assert.ok(kalan.length >= 1, "hiç dosya kalmadı");
+});
+
+test("yazılmakta olan dosya boyut temizliğinde silinmez", async () => {
+  const directory = tempDirectory();
+  const logger = createLogger({ directory, console: false, retentionDays: 0, maxTotalBytes: 10 });
+  logger.info("bu kayit kalmali");
+  logger.close();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const files = fs.readdirSync(directory);
+  assert.equal(files.length, 1);
+  assert.match(fs.readFileSync(path.join(directory, files[0]), "utf8"), /bu kayit kalmali/u);
+});

@@ -46,6 +46,25 @@ const BUNDLE_TARGETS = [
   ["encrypt-password.js", "redakt-encrypt-password.mjs"],
 ];
 
+// Destek çağrısında "hangi sürüm çalışıyor?" sorusunun cevabı buradan gelir.
+function writeBuildInfo() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(serverRoot, "package.json"), "utf8"));
+  let commit = null;
+  try {
+    commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: projectRoot, encoding: "utf8" }).trim();
+  } catch {
+    // Git yoksa sürüm yine de yazılır.
+  }
+  const info = {
+    surum: manifest.version,
+    derleme: new Date().toISOString().slice(0, 19).replace("T", " "),
+    commit,
+  };
+  fs.mkdirSync(path.join(outputRoot, "app"), { recursive: true });
+  fs.writeFileSync(path.join(outputRoot, "app", "build-info.json"), `${JSON.stringify(info, null, 2)}\n`);
+  return info;
+}
+
 function bundleServer() {
   const esbuild = resolveEsbuild();
   fs.mkdirSync(path.join(outputRoot, "app"), { recursive: true });
@@ -128,6 +147,8 @@ rmrf(path.join(outputRoot, "web"));
 
 log("1/4 · Sunucu kodu derleniyor");
 bundleServer();
+const info = writeBuildInfo();
+log(`  sürüm: v${info.surum}${info.commit ? ` · ${info.commit}` : ""} · ${info.derleme}`);
 
 log("2/4 · Web varlıkları kopyalanıyor");
 copyWebAssets();
