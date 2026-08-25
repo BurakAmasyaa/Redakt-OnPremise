@@ -31,7 +31,7 @@ Sunucu iki iş yapar: **uygulamayı sunmak** ve **kural listesini okumak**.
 Belge içeriği ne sunucuya gider, ne SQL'e yazılır, ne log'a düşer.
 
 Bu sınır kodda gevşetilmemesi gereken bir kuraldır ve testle korunur
-([tests/privacy.test.js](tests/privacy.test.js)): belgeyi işleyen 14 modülde ağ
+([tests/privacy.test.js](tests/privacy.test.js)): belgeyi işleyen 15 modülde ağ
 erişimi ve kalıcı depolama yasaktır, ağ erişimi yalnızca
 [src/rule-source.js](src/rule-source.js) içinde bulunabilir ve orada da tek
 yönlüdür — gövdesiz `GET`, yalnızca `/api/rules`.
@@ -55,6 +55,32 @@ gözden geçirip seçimini kaldırabilir.
 Desteklenen dosyalar: `.docx`, `.xlsx`, `.pdf`, `.txt`, `.jpg`, `.png`.
 Taranmış PDF sayfaları ve Office içine gömülü görseller yerel OCR ile
 (Türkçe + İngilizce) okunur.
+
+### Belgenin neresi taranır
+
+Bir Office dosyası tek bir XML değildir; metin paketin içine dağılır. Kapsam
+dışında kalan her parça sessiz sızıntı demektir, o yüzden liste açıkça verilir:
+
+| DOCX | XLSX |
+|---|---|
+| Gövde, metin kutuları | Hücreler (metin ve sayı) |
+| Üstbilgi, altbilgi (hepsi) | **Formüller ve formülün önbellek değeri** |
+| Dipnot, sonnot | Sayfa adları |
+| Yorum metni ve **yorum yazarı** | Hücre notları ve not yazarı |
+| Değişiklik izleme: silinen metin, revizyon yazarı | Çizim/grafik kutuları, grafiğin önbelleklediği değerler |
+| Alan kodları (`HYPERLINK` vb.) | Tanımlı ad formülleri |
+| Dış köprü hedefleri (`mailto:`) | Dış köprü hedefleri |
+| Gömülü görseller (OCR) | Gömülü görseller (OCR) |
+| Belge özellikleri: yazar, başlık, son kaydeden, şirket, özel alanlar | Belge özellikleri (aynı) |
+
+Bunların hepsi bulgu listesinde de görünür — kullanıcı neyin maskeleneceğini
+görmeden onaylamaz. Kapsamı [tests/output-leak.test.js](tests/output-leak.test.js)
+korur: çıktı paketi açılıp her nişan değeri **tüm** parçalarda aranır.
+
+Sayfa adı maskelenirken Excel'in ad kurallarına uydurulur (yasak karakterler,
+31 karakter sınırı) ve ona yapılan formül başvuruları birlikte güncellenir.
+Önbellek değeri maskelenip formül el değmeden kalırsa Excel dosyayı açtığında
+orijinali geri hesaplar; bu durumda formül düşürülür.
 
 Üç tarama seviyesi var — Hızlı, Dengeli, Kapsamlı — hız ve kapsam arasında denge kurar.
 
@@ -190,6 +216,7 @@ TLS, kimlik doğrulama, tablo ve yetkiler. Şirkette ilk bağlantıda bununla ba
 src/          Tarayıcı uygulaması (framework yok, vanilla + Vite)
   pipeline.js       Belge adaptörleri arayüzü
   office.js         DOCX/XLSX · pdf.js · txt.js · image.js
+  office-parts.js   Office paketinin metin taşıyan tüm parçaları
   pii.js            Regex + doğrulama katmanı
   ner.js            Yerel ONNX NER modeli
   ner-worker.js     NER'i ayrı thread'de çalıştırır

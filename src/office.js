@@ -5,11 +5,10 @@ import {
   createReplacementMap,
   NUMERIC_SAFE_CATEGORIES,
   replaceText,
-  replacementsForText,
 } from "./pii.js";
 import { redactEmbeddedImages, scanEmbeddedImages } from "./office-images.js";
+import { applyParts, partUnits, readParts, unreadableParts, writeParts } from "./office-parts.js";
 
-const WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const PDF_MIME = "application/pdf";
@@ -25,84 +24,35 @@ function requireXmlTools() {
   }
 }
 
-function parseWordXml(xml) {
+function parseOfficeXml(xml) {
   requireXmlTools();
-  const document = new DOMParser().parseFromString(xml.replace(/^\uFEFF/u, ""), "application/xml");
+  const document = new DOMParser().parseFromString(xml.replace(/^﻿/u, ""), "application/xml");
   if (document.getElementsByTagName("parsererror").length) {
-    throw new Error("Word belgesinin metin yapısı okunamadı.");
+    throw new Error("Belgenin metin yapısı okunamadı.");
   }
   return document;
 }
 
-function wordParagraphs(xmlDocument) {
-  return Array.from(xmlDocument.getElementsByTagNameNS(WORD_NAMESPACE, "p"));
+function serializeOfficeXml(xmlDocument) {
+  return new XMLSerializer().serializeToString(xmlDocument);
 }
 
-function textNodesInParagraph(paragraph) {
-  return Array.from(paragraph.getElementsByTagNameNS(WORD_NAMESPACE, "t"));
+function elementsByLocalName(xmlDocument, localName) {
+  return Array.from(xmlDocument.getElementsByTagNameNS("*", localName));
 }
 
-function paragraphText(paragraph) {
-  return textNodesInParagraph(paragraph).map((node) => node.textContent || "").join("");
-}
-
-function preserveWhitespace(node) {
-  const text = node.textContent || "";
-  if (/^\s|\s$/u.test(text)) node.setAttributeNS("http://www.w3.org/XML/1998/namespace", "xml:space", "preserve");
-}
-
-function replaceWordParagraph(paragraph, replacementMap) {
-  const nodes = textNodesInParagraph(paragraph);
-  if (!nodes.length) return;
-  const original = nodes.map((node) => node.textContent || "").join("");
-  const replacements = replacementsForText(original, replacementMap);
-  if (!replacements.length) return;
-
-  const starts = [];
-  let cursor = 0;
-  for (const node of nodes) {
-    starts.push(cursor);
-    cursor += (node.textContent || "").length;
+// Bir hücrenin maskelenebilir metni birden fazla olabilir: formülün kendisi ve
+// formülün ürettiği önbellek değeri. İkincisi Excel'de görünen, birincisi formül
+// çubuğunda görünen değerdir; ikisi de sızabilir.
+function cellSlots(cell) {
+  if (!cell) return [];
+  const slots = [];
+  if (typeof cell.f === "string" && cell.f.trim()) slots.push({ field: "f", text: cell.f, numeric: false });
+  if (typeof cell.v === "string") slots.push({ field: "v", text: cell.v, numeric: false });
+  else if (typeof cell.v === "number" && Number.isSafeInteger(cell.v)) {
+    slots.push({ field: "v", text: String(cell.v), numeric: true });
   }
-
-  const locate = (position) => {
-    for (let index = nodes.length - 1; index >= 0; index -= 1) {
-      if (starts[index] <= position) return [index, position - starts[index]];
-    }
-    return [0, position];
-  };
-
-  for (const match of [...replacements].reverse()) {
-    const [startNodeIndex, startOffset] = locate(match.start);
-    const [endNodeIndex, finalCharacterOffset] = locate(match.end - 1);
-    const endOffset = finalCharacterOffset + 1;
-    const startNode = nodes[startNodeIndex];
-    const endNode = nodes[endNodeIndex];
-
-    if (startNodeIndex === endNodeIndex) {
-      const text = startNode.textContent || "";
-      startNode.textContent = text.slice(0, startOffset) + match.placeholder + text.slice(endOffset);
-      preserveWhitespace(startNode);
-      continue;
-    }
-
-    const prefix = (startNode.textContent || "").slice(0, startOffset);
-    const suffix = (endNode.textContent || "").slice(endOffset);
-    startNode.textContent = prefix + match.placeholder;
-    for (let index = startNodeIndex + 1; index < endNodeIndex; index += 1) {
-      nodes[index].textContent = "";
-    }
-    endNode.textContent = suffix;
-    preserveWhitespace(startNode);
-    preserveWhitespace(endNode);
-  }
-}
-
-function cellText(cell) {
-  if (!cell || cell.f) return null;
-  if (typeof cell.v === "string") return { text: cell.v, numeric: false };
-  if (typeof cell.v === "number" && Number.isSafeInteger(cell.v)) return { text: String(cell.v), numeric: true };
-  return null;
+  return slots;
 }
 
 function workbookCells(workbook) {
@@ -115,8 +65,9 @@ function workbookCells(workbook) {
       for (let column = range.s.c; column <= range.e.c; column += 1) {
         const address = XLSX.utils.encode_cell({ r: row, c: column });
         const cell = sheet[address];
-        const result = cellText(cell);
-        if (result) cells.push({ cell, text: result.text, numeric: result.numeric, address, sheetName });
+        for (const slot of cellSlots(cell)) {
+          cells.push({ cell, ...slot, address, sheetName });
+        }
       }
     }
   }
@@ -136,20 +87,33 @@ function appendImageUnits(units, images, kind) {
 
 export async function scanDocx(arrayBuffer, filename, options = {}) {
   const zip = await JSZip.loadAsync(arrayBuffer, { checkCRC32: true });
-  const entry = zip.file("word/document.xml");
-  if (!entry) throw new Error("Bu dosya geçerli bir DOCX belgesi değil.");
-  const xml = await entry.async("string");
-  const xmlDocument = parseWordXml(xml);
-  const paragraphs = wordParagraphs(xmlDocument);
-  const units = paragraphs
-    .map((paragraph, paragraphIndex) => ({ text: paragraphText(paragraph), location: { kind: "docx", paragraphIndex } }))
-    .filter((unit) => unit.text);
+  if (!zip.file("word/document.xml")) throw new Error("Bu dosya geçerli bir DOCX belgesi değil.");
+
+  // Gövde, üstbilgi, altbilgi, dipnot, sonnot, yorum, kişi kayıtları, çizimler,
+  // belge özellikleri ve dış köprü hedefleri — hepsi tek geçişte okunur.
+  const { parts, slots } = await readParts(zip, parseOfficeXml, { kind: "docx" });
+  if (!parts.some((part) => part.path === "word/document.xml" && !part.unreadable)) {
+    throw new Error("Word belgesinin metin yapısı okunamadı.");
+  }
+
+  const units = partUnits(slots);
   const ocrImages = await scanEmbeddedImages(zip, "word/media", options);
   appendImageUnits(units, ocrImages, "docx");
   const texts = units.map((unit) => unit.text);
   const findings = aggregateFindings(units);
   return {
-    context: { kind: "docx", filename, zip, xmlDocument, texts, units, ocrImages, ocrImageCount: ocrImages.length },
+    context: {
+      kind: "docx",
+      filename,
+      zip,
+      parts,
+      xmlDocument: parts.find((part) => part.path === "word/document.xml")?.xmlDocument || null,
+      skippedParts: unreadableParts(parts),
+      texts,
+      units,
+      ocrImages,
+      ocrImageCount: ocrImages.length,
+    },
     findings,
   };
 }
@@ -164,18 +128,46 @@ export async function scanXlsx(arrayBuffer, filename, options = {}) {
   });
   const originalZip = await JSZip.loadAsync(arrayBuffer, { checkCRC32: true });
   if (!originalZip.file("xl/workbook.xml")) throw new Error("Bu dosya geçerli bir XLSX çalışma kitabı değil.");
+
   const cells = workbookCells(workbook);
-  const units = cells.map(({ text, address, sheetName, numeric }) => ({
-    text,
-    location: { kind: "xlsx", sheetName, address },
-    categories: numeric ? NUMERIC_SAFE_CATEGORIES : null,
+  const units = [];
+  for (const entry of cells) {
+    entry.unitIndex = units.length;
+    units.push({
+      text: entry.text,
+      location: { kind: "xlsx", sheetName: entry.sheetName, address: entry.address, field: entry.field },
+      categories: entry.numeric ? NUMERIC_SAFE_CATEGORIES : null,
+    });
+  }
+
+  // Sayfa adı da müşteri adı taşıyabilir ve dosyanın en görünür yerindedir.
+  const sheetNameUnits = workbook.SheetNames.map((sheetName) => ({
+    text: sheetName,
+    location: { kind: "xlsx", part: "xl/workbook.xml", field: "sheetName", sheetName },
   }));
+  units.push(...sheetNameUnits);
+
+  const { parts, slots } = await readParts(originalZip, parseOfficeXml, { kind: "xlsx" });
+  units.push(...partUnits(slots));
+
   const ocrImages = await scanEmbeddedImages(originalZip, "xl/media", options);
   appendImageUnits(units, ocrImages, "xlsx");
   const texts = units.map((unit) => unit.text);
   const findings = aggregateFindings(units);
   return {
-    context: { kind: "xlsx", filename, workbook, originalZip, texts, units, ocrImages, ocrImageCount: ocrImages.length },
+    context: {
+      kind: "xlsx",
+      filename,
+      workbook,
+      originalZip,
+      cells,
+      parts,
+      skippedParts: unreadableParts(parts),
+      texts,
+      units,
+      ocrImages,
+      ocrImageCount: ocrImages.length,
+    },
     findings,
   };
 }
@@ -216,17 +208,16 @@ export async function disposeOfficeContext(context) {
   context.workbook = null;
   context.originalZip = null;
   context.zip = null;
+  context.parts = null;
+  context.cells = null;
   context.texts = [];
   context.units = [];
   context.ocrImages = [];
 }
 
 export async function redactDocx(context, replacementMap, options = {}) {
-  for (const paragraph of wordParagraphs(context.xmlDocument)) {
-    replaceWordParagraph(paragraph, replacementMap);
-  }
-  const xml = new XMLSerializer().serializeToString(context.xmlDocument);
-  context.zip.file("word/document.xml", xml);
+  const changed = applyParts(context.parts, replacementMap);
+  writeParts(context.zip, context.parts, serializeOfficeXml, changed);
   await redactEmbeddedImages(context.zip, context.ocrImages, replacementMap, options);
   return context.zip.generateAsync({
     type: "uint8array",
@@ -248,16 +239,12 @@ function normalizeZipPath(base, target) {
   return normalized.join("/");
 }
 
-function elementsByLocalName(xmlDocument, localName) {
-  return Array.from(xmlDocument.getElementsByTagNameNS("*", localName));
-}
-
 async function sheetPartMap(zip) {
   const workbookEntry = zip.file("xl/workbook.xml");
   const relationshipsEntry = zip.file("xl/_rels/workbook.xml.rels");
   if (!workbookEntry || !relationshipsEntry) throw new Error("Excel sayfa ilişkileri okunamadı.");
-  const workbookDocument = parseWordXml(await workbookEntry.async("string"));
-  const relationshipsDocument = parseWordXml(await relationshipsEntry.async("string"));
+  const workbookDocument = parseOfficeXml(await workbookEntry.async("string"));
+  const relationshipsDocument = parseOfficeXml(await relationshipsEntry.async("string"));
   const targets = new Map(
     elementsByLocalName(relationshipsDocument, "Relationship").map((relationship) => [
       relationship.getAttribute("Id"),
@@ -267,7 +254,7 @@ async function sheetPartMap(zip) {
   return new Map(
     elementsByLocalName(workbookDocument, "sheet").map((sheet) => [
       sheet.getAttribute("name"),
-      targets.get(sheet.getAttribute("r:id") || sheet.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id")),
+      targets.get(sheet.getAttribute("r:id") || sheet.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships/", "id")),
     ])
   );
 }
@@ -280,36 +267,111 @@ function cellsByAddress(xmlDocument) {
   );
 }
 
+const TRANSPLANTED_CHILDREN = ["v", "is", "f"];
+
 function transplantCellValue(originalCell, generatedCell) {
   const generatedType = generatedCell.getAttribute("t");
   if (generatedType) originalCell.setAttribute("t", generatedType);
   else originalCell.removeAttribute("t");
 
   for (const child of Array.from(originalCell.childNodes)) {
-    if (child.nodeType === 1 && ["v", "is"].includes(child.localName || child.nodeName.split(":").pop())) {
+    if (child.nodeType === 1 && TRANSPLANTED_CHILDREN.includes(child.localName || child.nodeName.split(":").pop())) {
       originalCell.removeChild(child);
     }
   }
   for (const child of Array.from(generatedCell.childNodes)) {
-    if (child.nodeType === 1 && ["v", "is"].includes(child.localName || child.nodeName.split(":").pop())) {
+    if (child.nodeType === 1 && TRANSPLANTED_CHILDREN.includes(child.localName || child.nodeName.split(":").pop())) {
       originalCell.appendChild(child.cloneNode(true));
     }
   }
 }
 
-async function preserveOriginalXlsxPackage(originalZip, generatedBytes, modifiedBySheet) {
+// Excel sayfa adlarında bu karakterler yasaktır ve ad 31 karakteri aşamaz.
+// Yer tutucu doğrudan yazılırsa ("[EMAIL_1]") Excel dosyayı bozuk sayar.
+const FORBIDDEN_SHEET_CHARACTERS = /[[\]:*?/\\]/gu;
+
+function safeSheetName(candidate, used) {
+  let name = String(candidate).replace(FORBIDDEN_SHEET_CHARACTERS, "_").replace(/^'+|'+$/gu, "").trim().slice(0, 31);
+  if (!name) name = "Sayfa";
+  let unique = name;
+  let counter = 2;
+  while (used.has(unique.toLocaleLowerCase("tr-TR"))) {
+    const suffix = `_${counter}`;
+    counter += 1;
+    unique = name.slice(0, 31 - suffix.length) + suffix;
+  }
+  used.add(unique.toLocaleLowerCase("tr-TR"));
+  return unique;
+}
+
+function computeSheetRenames(sheetNames, replacementMap) {
+  const renames = new Map();
+  const used = new Set();
+  for (const sheetName of sheetNames) {
+    const replaced = replaceText(sheetName, replacementMap);
+    if (replaced === sheetName) {
+      used.add(sheetName.toLocaleLowerCase("tr-TR"));
+      continue;
+    }
+    renames.set(sheetName, safeSheetName(replaced, used));
+  }
+  return renames;
+}
+
+function escapeForRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+// Sayfa adı değişince ona yapılan tüm başvurular da değişmeli, yoksa formüller
+// #REF! olur. Başvuru ya tırnaklı ('Satış 2026'!A1) ya da çıplaktır (Rapor!A1).
+function rewriteSheetReferences(text, renames) {
+  if (!renames.size || !text) return text;
+  let output = String(text);
+  for (const [oldName, newName] of renames) {
+    const quotedOld = oldName.replace(/'/gu, "''");
+    const quotedNew = newName.replace(/'/gu, "''");
+    output = output.replace(new RegExp(`'${escapeForRegExp(quotedOld)}'(?=!)`, "gu"), `'${quotedNew}'`);
+    if (/^[A-Za-z_\\][\w.\\]*$/u.test(oldName)) {
+      output = output.replace(new RegExp(`(?<![\\w.'!])${escapeForRegExp(oldName)}(?=!)`, "gu"), newName);
+    }
+  }
+  return output;
+}
+
+function applySheetRenamesToPart(part, renames) {
+  if (!part?.xmlDocument || !renames.size) return false;
+  let changed = false;
+  for (const sheet of elementsByLocalName(part.xmlDocument, "sheet")) {
+    const current = sheet.getAttribute("name");
+    if (renames.has(current)) {
+      sheet.setAttribute("name", renames.get(current));
+      changed = true;
+    }
+  }
+  // docProps/app.xml sayfa adlarını ikinci bir kopya olarak taşır.
+  for (const entry of elementsByLocalName(part.xmlDocument, "lpstr")) {
+    const current = entry.textContent || "";
+    if (renames.has(current)) {
+      entry.textContent = renames.get(current);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+async function preserveOriginalXlsxPackage(originalZip, generatedBytes, modifiedBySheet, renames) {
   const generatedZip = await JSZip.loadAsync(generatedBytes);
   const originalParts = await sheetPartMap(originalZip);
   const generatedParts = await sheetPartMap(generatedZip);
 
   for (const [sheetName, addresses] of modifiedBySheet) {
-    const originalPath = originalParts.get(sheetName);
-    const generatedPath = generatedParts.get(sheetName);
+    const originalPath = originalParts.get(sheetName) || originalParts.get(renames.get(sheetName));
+    const generatedPath = generatedParts.get(sheetName) || generatedParts.get(renames.get(sheetName));
     const originalEntry = originalZip.file(originalPath);
     const generatedEntry = generatedZip.file(generatedPath);
     if (!originalEntry || !generatedEntry) throw new Error("Excel sayfa içeriği yeniden yazılamadı.");
-    const originalDocument = parseWordXml(await originalEntry.async("string"));
-    const generatedDocument = parseWordXml(await generatedEntry.async("string"));
+    const originalDocument = parseOfficeXml(await originalEntry.async("string"));
+    const generatedDocument = parseOfficeXml(await generatedEntry.async("string"));
     const originalCells = cellsByAddress(originalDocument);
     const generatedCells = cellsByAddress(generatedDocument);
 
@@ -319,7 +381,7 @@ async function preserveOriginalXlsxPackage(originalZip, generatedBytes, modified
       if (!originalCell || !generatedCell) throw new Error(`Excel hücresi güncellenemedi: ${address}`);
       transplantCellValue(originalCell, generatedCell);
     }
-    originalZip.file(originalPath, new XMLSerializer().serializeToString(originalDocument));
+    originalZip.file(originalPath, serializeOfficeXml(originalDocument));
   }
 
   return originalZip.generateAsync({
@@ -331,23 +393,48 @@ async function preserveOriginalXlsxPackage(originalZip, generatedBytes, modified
 }
 
 export async function redactXlsx(context, replacementMap, options = {}) {
+  const renames = computeSheetRenames(context.workbook.SheetNames, replacementMap);
   const modifiedBySheet = new Map();
-  const cells = workbookCells(context.workbook);
-  for (let unitIndex = 0; unitIndex < cells.length; unitIndex += 1) {
-    const { cell, text, address, sheetName, numeric } = cells[unitIndex];
-    const replaced = replaceText(text, replacementMap, {
-      unitIndex,
+  const cells = context.cells || workbookCells(context.workbook);
+
+  const markModified = (sheetName, address) => {
+    if (!modifiedBySheet.has(sheetName)) modifiedBySheet.set(sheetName, new Set());
+    modifiedBySheet.get(sheetName).add(address);
+  };
+  const valueChanged = new Set();
+  const formulaChanged = new Set();
+
+  for (const entry of cells) {
+    const { cell, text, address, sheetName, numeric, field, unitIndex } = entry;
+    const source = field === "f" ? rewriteSheetReferences(text, renames) : text;
+    const replaced = replaceText(source, replacementMap, {
+      ...(unitIndex === undefined ? {} : { unitIndex }),
       ...(numeric ? { categories: NUMERIC_SAFE_CATEGORIES } : {}),
     });
     if (replaced === text) continue;
-    cell.v = replaced;
-    cell.t = "s";
-    delete cell.w;
-    delete cell.r;
-    delete cell.h;
-    if (!modifiedBySheet.has(sheetName)) modifiedBySheet.set(sheetName, new Set());
-    modifiedBySheet.get(sheetName).add(address);
+    if (field === "f") {
+      cell.f = replaced;
+      formulaChanged.add(`${sheetName} ${address}`);
+    } else {
+      cell.v = replaced;
+      cell.t = "s";
+      delete cell.w;
+      delete cell.r;
+      delete cell.h;
+      valueChanged.add(`${sheetName} ${address}`);
+    }
+    markModified(sheetName, address);
   }
+
+  // Önbellek değeri maskelendiği hâlde formül dokunulmadan kalırsa Excel dosyayı
+  // açtığında formülü yeniden hesaplar ve orijinali geri getirir. O formül düşer.
+  for (const key of valueChanged) {
+    if (formulaChanged.has(key)) continue;
+    const [sheetName, address] = key.split(" ");
+    const cell = context.workbook.Sheets[sheetName]?.[address];
+    if (cell?.f) delete cell.f;
+  }
+
   const generatedBytes = XLSX.write(context.workbook, {
     bookType: "xlsx",
     type: "array",
@@ -355,8 +442,21 @@ export async function redactXlsx(context, replacementMap, options = {}) {
     bookSST: false,
     compression: true,
   });
+
   await redactEmbeddedImages(context.originalZip, context.ocrImages, replacementMap, options);
-  return preserveOriginalXlsxPackage(context.originalZip, generatedBytes, modifiedBySheet);
+
+  // Paylaşılan dizge tablosu, hücre notları, çizim kutuları, belge özellikleri
+  // ve dış köprüler. Hücreler yamalanmış olsa da orijinal metin bu parçalarda
+  // durmaya devam ederdi.
+  const changed = applyParts(context.parts, replacementMap, {
+    preTransform: (text) => rewriteSheetReferences(text, renames),
+  });
+  for (const part of context.parts) {
+    if (applySheetRenamesToPart(part, renames)) changed.add(part.path);
+  }
+  writeParts(context.originalZip, context.parts, serializeOfficeXml, changed);
+
+  return preserveOriginalXlsxPackage(context.originalZip, generatedBytes, modifiedBySheet, renames);
 }
 
 export async function redactOffice(context, findings, selectedIds, options = {}) {

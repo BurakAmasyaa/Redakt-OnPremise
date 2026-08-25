@@ -40,6 +40,7 @@ const DOCUMENT_MODULES = [
   "src/main.js",
   "src/pipeline.js",
   "src/office.js",
+  "src/office-parts.js",
   "src/office-images.js",
   "src/pdf.js",
   "src/txt.js",
