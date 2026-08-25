@@ -198,14 +198,56 @@ döner. Kullanıcı "hata aldım" dediğinde bu kimlikle log'daki tam kaydı bul
 **Log gürültüsü.** SQL erişilemez hale geldiğinde tek bir kayıt yazılır, geri
 geldiğinde bir kayıt daha. İzleme sistemi 30 saniyede bir yoklasa da log dolmaz.
 
+---
+
+## Erişim kontrolü
+
+`/api/rules` **tüm kurumsal kural listesini** döner. O liste müşteri adları,
+proje kodları ve personel isimlerinden oluşur — yani listenin kendisi korunması
+gereken bir varlıktır. Bu yüzden kimlik doğrulama kapalıyken servis her açılışta
+log'a uyarı yazar.
+
+Kimliği **ters proxy** (IIS / nginx) doğrular, servis onun ilettiği başlığa
+güvenir. Kurumsal Windows ortamında Windows Integrated Authentication zaten orada
+yapılır; servise ek bağımlılık girmez.
+
+```
+AUTH_MODE=proxy
+AUTH_USER_HEADER=x-remote-user
+AUTH_TRUSTED_PROXIES=127.0.0.1,::1
+```
+
+Servis iki koşulu birden zorlar: istek güvenilen bir adresten gelmeli **ve**
+kimlik başlığı dolu olmalı. Değilse `403` / `401` döner ve uygulama hiç açılmaz.
+`AUTH_MODE=proxy` iken servis varsayılan olarak yalnızca `127.0.0.1` dinler.
+
+Üçüncü koşulu ise yalnızca proxy sağlayabilir: **istemciden gelen kimlik
+başlığını silmeli.** Silmezse herhangi bir kullanıcı isteğine
+`X-Remote-User: baskasi` ekleyip başkası gibi görünür. Bu kodla zorlanamaz;
+IIS ve nginx örnekleri [kurulum belgesinde](server/scripts/KURULUM.md).
+
+İzleme uçları (`/api/health`, `/api/ready`) kimlik istemez — izleme sistemi
+kimlik başlığı gönderemediği için aksi hâlde servisi ölü sanardı. Bu uçlar kural
+metni döndürmez, yalnızca sayaç ve durum.
+
+**HTTPS.** `HTTPS_CERT` + `HTTPS_KEY` verilirse servis doğrudan TLS ile dinler ve
+`Strict-Transport-Security` gönderir. Verilmezse düz HTTP kalır ve TLS'i ters
+proxy üstlenir. İkisi de geçerli kurulumdur; hiçbiri yapılmazsa kural listesi
+ağda düz metin geçer.
+
+---
+
+## Kayıt ve disk
+
 **Disk koruması.** Log dosyaları hem günlük hem boyut sınırına göre bölünür
 (`LOG_MAX_FILE_MB`) ve klasörün toplam boyutu aşılırsa en eski dosyalar silinir
 (`LOG_MAX_TOTAL_MB`). Bir hata döngüsü diski dolduramaz. Yazılmakta olan dosya
 temizlikte hiçbir zaman silinmez.
 
-> Şu an kimlik doğrulama olmadığı için `/api/health` ağdaki herkese açıktır ve
-> SQL hata mesajı sunucu adını içerebilir. Giriş eklendiğinde bu uçların da
-> korunması gerekir.
+> İzleme uçları kimlik doğrulama açıkken de korumasızdır — bu bilinçli bir
+> tercihtir, izleme sistemi kimlik başlığı gönderemez. Kural metni dönmezler ama
+> `/api/ready` SQL hata mesajını yansıtır ve o mesaj sunucu adını içerebilir.
+> Hassassa ters proxy'de bu iki yolu kaynak IP ile sınırlayın.
 
 ## Geliştirme
 
@@ -252,12 +294,13 @@ server/       Şirket içi servis
   src/diagnostics.js    Sayaçlar ve SQL durum takibi
   src/build-info.js     Sürüm/commit bilgisi
   src/secret.js         DPAPI ile şifrelenmiş parola
+  src/auth.js           Ters proxy kimlik doğrulaması
   src/check.js          Kurulum doğrulama aracı
   scripts/              kurulum.ps1 ve KURULUM.md
 
 public/models/   Türkçe NER modeli (~150 MB)
 public/ocr/      Tesseract dil dosyaları (~31 MB)
-tests/           116 test
+tests/           129 test
 ```
 
 ### Kural eşleştirme motoru
@@ -308,11 +351,18 @@ gerekiyor; Internet Explorer ve eski Edge çalışmaz.
   `Cross-Origin-Embedder-Policy` başlığı eklenince izolasyon açılıyor **ama NER hiç
   bulgu üretmiyor**; nedeni henüz bulunamadı. Bu yüzden başlık eklenmedi.
   Çözülürse büyük belgelerde 3-6× hızlanma bekleniyor.
-- **Kullanıcı girişi ve denetim logu yok.** Şu an ağa erişen herkes kullanabilir.
-  KVKK denetimi için "kim, ne zaman, hangi belgeyi maskeledi" kaydı gerekiyorsa
-  kimlik doğrulama (tercihen Windows Integrated Authentication) eklenmelidir.
-- **HTTPS yapılandırması eklenmedi.** Kurumun mevcut düzenine göre ya ters proxy
-  arkasında çalışacak ya da sertifika doğrudan servise tanımlanacak.
+- **Belge düzeyinde KVKK denetim izi yok.** Log "kim, ne zaman kural listesini
+  çekti"yi yazar; "kim, hangi belgeyi maskeledi"yi yazmaz. Yazabilmesi için
+  tarayıcının sunucuya belge adı ve bulgu sayısı göndermesi gerekirdi — bu da
+  ürünün temel sınırını ("belge tarayıcıdan çıkmaz") gevşetirdi. Bilerek
+  yapılmadı; gerekiyorsa bilinçli bir karar olarak ele alınmalıdır.
+- **Bulanık eşleşme 5–7 harfli kurallarda hâlâ 1 harf tolere eder.** `Siskon`
+  kuralı `Diskon`'u yakalar. Birebir eşleşmesi gerekenlerde `TamEslesme = 1`
+  kullanın; `redakt-check` riskli kuralları listeler.
+- **Tanımlı ad (defined name) *etiketleri* maskelenmez.** Excel'de bir tanımlı adın
+  kendisi kişi adı taşıyorsa (`Ahmet_Bakiye`) formül metni maskelenir ama etiketin
+  kendisi kalır — yeniden adlandırma tüm formül başvurularını bozma riski taşıyor.
+  Etiketler e-posta veya boşluk içeremediği için pratikte dar bir durum.
 - **`kurulum.ps1` gerçek Windows'ta denenmedi.** İlk kurulumda küçük düzeltme
   gerekebilir.
 

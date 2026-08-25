@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import http from "node:http";
+import https from "node:https";
+import { AUTH_RESULT, createAuthenticator } from "./auth.js";
 import { buildInfo, versionLine } from "./build-info.js";
-import { loadDatabaseConfig, loadEnvFile, loadLogConfig, loadServerConfig } from "./config.js";
+import { loadDatabaseConfig, loadEnvFile, loadLogConfig, loadServerConfig, loadTlsConfig } from "./config.js";
 import { checkConnection, closePool } from "./db.js";
 import { createDiagnostics } from "./diagnostics.js";
 import { createLogger } from "./logger.js";
@@ -14,6 +16,17 @@ const logger = createLogger(loadLogConfig());
 const diagnostics = createDiagnostics();
 
 const serverConfig = loadServerConfig();
+
+let authenticator;
+let tlsOptions;
+try {
+  authenticator = createAuthenticator(serverConfig.auth);
+  tlsOptions = loadTlsConfig();
+} catch (error) {
+  logger.error("Erişim yapılandırması okunamadı, servis başlatılamıyor", { error });
+  process.exit(1);
+}
+
 let dbConfig;
 try {
   dbConfig = loadDatabaseConfig({ logger });
@@ -25,6 +38,7 @@ const rules = createRulesRepository({
   dbConfig,
   table: serverConfig.rulesTable,
   cacheTtlMs: serverConfig.cacheTtlMs,
+  logger,
 });
 const serveStatic = createStaticHandler(serverConfig.staticRoot);
 
@@ -43,10 +57,40 @@ const CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'none'",
 ].join("; ");
 
-// Denetim ve sorun giderme için istemci adresi; ileride kimlik doğrulama
-// eklendiğinde bunun yerine kullanıcı adı kaydedilecek.
+// Denetim ve sorun giderme için istek sahibi. Kimlik doğrulama açıkken proxy'nin
+// ilettiği kullanıcı adı, kapalıyken yalnızca istemci adresi kaydedilir.
 function clientAddress(request) {
   return request.socket?.remoteAddress || "-";
+}
+
+function requester(request) {
+  return request.user || clientAddress(request);
+}
+
+// İzleme uçları kimlik istemez: yük dengeleyici ve izleme sistemi kimlik
+// başlığı gönderemez, gönderemediği için de servisi ölü sanar.
+const OPEN_PATHS = new Set(["/api/health", "/api/ready"]);
+
+function rejectUnauthenticated(request, response, pathname, result) {
+  const apiRequest = pathname.startsWith("/api/");
+  const untrusted = result.reason === AUTH_RESULT.untrustedSource;
+  const status = untrusted ? 403 : 401;
+  const message = untrusted
+    ? "Bu adresten gelen istekler kabul edilmiyor. Uygulamaya ters proxy üzerinden bağlanın."
+    : "Kimlik doğrulanamadı. Ters proxy kimlik başlığını iletmiyor olabilir.";
+
+  // Tarayıcı bir sayfa için yüzlerce statik istek üretir; hepsini uyarı olarak
+  // yazmak log'u boğar. Uyarı yalnızca API ve sayfa istekleri için.
+  const level = apiRequest ? "warn" : "debug";
+  logger[level]("İstek kimlik doğrulamasından geçemedi", {
+    yol: pathname,
+    istemci: result.address || clientAddress(request),
+    neden: result.reason,
+    requestId: request.requestId,
+  });
+
+  if (apiRequest) sendJson(response, status, { message, requestId: request.requestId });
+  else response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" }).end(message);
 }
 
 function sendJson(response, status, body, headers = {}) {
@@ -130,7 +174,7 @@ async function handleRules(request, response) {
     }
     diagnostics.say("kuralIstegi");
     if (diagnostics.sqlBasarili()) logger.info("SQL bağlantısı yeniden kuruldu");
-    logger.info("Kural listesi sunuldu", { adet: snapshot.rules.length, etag: snapshot.etag, bayat: snapshot.stale, requestId: request.requestId });
+    logger.info("Kural listesi sunuldu", { adet: snapshot.rules.length, etag: snapshot.etag, bayat: snapshot.stale, kullanici: requester(request), requestId: request.requestId });
     sendJson(response, 200, {
       rules: snapshot.rules,
       count: snapshot.rules.length,
@@ -156,7 +200,7 @@ async function handleRules(request, response) {
   }
 }
 
-const server = http.createServer(async (request, response) => {
+async function handleRequest(request, response) {
   // Her isteğe kimlik: kullanıcı "hata aldım" dediğinde ilgili kaydı
   // log'da bulmanın tek pratik yolu budur. Yanıt başlığında da döner.
   request.requestId = crypto.randomUUID().slice(0, 8);
@@ -165,6 +209,9 @@ const server = http.createServer(async (request, response) => {
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  if (tlsOptions || request.headers["x-forwarded-proto"] === "https") {
+    response.setHeader("Strict-Transport-Security", "max-age=31536000");
+  }
 
   const pathname = (request.url || "/").split("?")[0];
   diagnostics.say("istek");
@@ -178,6 +225,15 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 405, { message: "Yalnızca GET desteklenir." });
       return;
     }
+    if (authenticator.required && !OPEN_PATHS.has(pathname)) {
+      const result = authenticator.authenticate(request);
+      if (!result.ok) {
+        diagnostics.say("kimlikRet");
+        rejectUnauthenticated(request, response, pathname, result);
+        return;
+      }
+      request.user = result.user;
+    }
     if (pathname === "/api/health") return handleHealth(request, response);
     if (pathname === "/api/ready") return await handleReady(request, response);
     if (pathname === "/api/rules") return await handleRules(request, response);
@@ -188,22 +244,39 @@ const server = http.createServer(async (request, response) => {
     if (await serveStatic(request, response)) {
       // Statik varlıklar sayfa başına yüzlerce istek üretir; yalnızca
       // reddedilen istekler kaydedilir, başarılı olanlar log'u boğmaz.
-      if (response.statusCode === 403) logger.warn("Statik istek reddedildi", { yol: pathname, istemci: clientAddress(request), requestId: request.requestId });
+      if (response.statusCode === 403) logger.warn("Statik istek reddedildi", { yol: pathname, istemci: requester(request), requestId: request.requestId });
       return;
     }
-    logger.warn("Bulunamayan yol istendi", { yol: pathname, istemci: clientAddress(request), requestId: request.requestId });
+    logger.warn("Bulunamayan yol istendi", { yol: pathname, istemci: requester(request), requestId: request.requestId });
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Sayfa bulunamadı.");
   } catch (error) {
     logger.error("İstek işlenirken hata", { yol: pathname, error, requestId: request.requestId });
     if (response.headersSent) response.destroy();
     else sendJson(response, 500, { message: "Sunucu hatası.", detail: error.message, requestId: request.requestId });
   }
-});
+}
+
+const server = tlsOptions
+  ? https.createServer(tlsOptions, handleRequest)
+  : http.createServer(handleRequest);
 
 server.listen(serverConfig.port, serverConfig.host, () => {
+  if (authenticator.required && serverConfig.host !== "127.0.0.1" && serverConfig.host !== "localhost") {
+    logger.warn("Servis doğrudan erişilebilir bir adrese bağlandı", {
+      adres: serverConfig.host,
+      not: "Kimlik doğrulaması ters proxy'de yapılıyor. Güvenilmeyen kaynaklar reddedilir ama servisi yalnızca proxy'nin görebilmesi daha güvenlidir (HTTP_HOST=127.0.0.1).",
+    });
+  }
+  if (!authenticator.required) {
+    logger.warn("Kimlik doğrulama kapalı", {
+      not: "/api/rules tüm kurumsal kural listesini kimliksiz döner. AUTH_MODE=proxy ile kapatın.",
+    });
+  }
   logger.info("Redakt On-Premise başladı", {
     surum: versionLine(),
-    adres: `http://${serverConfig.host}:${serverConfig.port}`,
+    adres: `${tlsOptions ? "https" : "http"}://${serverConfig.host}:${serverConfig.port}`,
+    kimlik_dogrulama: authenticator.required ? `proxy (${authenticator.userHeader}, güvenilen: ${authenticator.trustedProxies.join(", ")})` : "kapalı",
+    tls: tlsOptions ? "servis üstünde" : "yok (ters proxy üstlenmeli)",
     statik_kok: serverConfig.staticRoot,
     kural_tablosu: serverConfig.rulesTable,
     sql: `${dbConfig.server}${dbConfig.port ? `:${dbConfig.port}` : ""}`,

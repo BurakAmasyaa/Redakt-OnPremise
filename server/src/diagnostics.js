@@ -8,6 +8,7 @@ export function createDiagnostics({ now = () => Date.now() } = {}) {
     istek: 0,
     kuralIstegi: 0,
     kuralDegismedi: 0,
+    kimlikRet: 0,
     hata4xx: 0,
     hata5xx: 0,
     sqlHatasi: 0,

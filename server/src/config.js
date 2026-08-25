@@ -74,13 +74,53 @@ export function loadDatabaseConfig({ logger } = {}) {
   };
 }
 
-export function loadServerConfig() {
+function loadAuthConfig() {
   return {
-    host: process.env.HTTP_HOST || "0.0.0.0",
+    mode: (process.env.AUTH_MODE || "none").toLowerCase(),
+    userHeader: (process.env.AUTH_USER_HEADER || "x-remote-user").toLowerCase(),
+    trustedProxies: (process.env.AUTH_TRUSTED_PROXIES || "127.0.0.1,::1")
+      .split(",").map((entry) => entry.trim()).filter(Boolean),
+  };
+}
+
+function readCertificateFile(name, file) {
+  const resolved = path.resolve(serverRoot, file);
+  try {
+    return fs.readFileSync(resolved);
+  } catch (error) {
+    throw new Error(`${name} okunamadı: ${resolved} (${error.code || error.message})`);
+  }
+}
+
+// Sertifika verilirse servis doğrudan TLS ile dinler; verilmezse düz HTTP
+// kalır ve TLS'i ters proxy üstlenir. İkisi de geçerli kurulumdur.
+export function loadTlsConfig() {
+  const cert = process.env.HTTPS_CERT || null;
+  const key = process.env.HTTPS_KEY || null;
+  if (!cert && !key) return null;
+  if (!cert || !key) {
+    throw new Error("HTTPS için hem HTTPS_CERT hem HTTPS_KEY verilmeli; yalnızca biri verilmiş.");
+  }
+  const options = {
+    cert: readCertificateFile("HTTPS_CERT", cert),
+    key: readCertificateFile("HTTPS_KEY", key),
+  };
+  if (process.env.HTTPS_CA) options.ca = readCertificateFile("HTTPS_CA", process.env.HTTPS_CA);
+  return options;
+}
+
+export function loadServerConfig() {
+  const auth = loadAuthConfig();
+  return {
+    // Kimlik doğrulaması ters proxy'de yapılıyorsa servisin kendisi dışarıya
+    // açık olmamalı: doğrudan erişilebilen bir port o kontrolü atlatma denemesi
+    // için ilk hedeftir. Bu yüzden proxy modunda varsayılan yalnızca yereldir.
+    host: process.env.HTTP_HOST || (auth.mode === "proxy" ? "127.0.0.1" : "0.0.0.0"),
     port: Number(process.env.HTTP_PORT || 8080),
     staticRoot: path.resolve(serverRoot, process.env.STATIC_ROOT || "../dist"),
     rulesTable: process.env.SQL_RULES_TABLE || "dbo.RedaktKurallari",
     cacheTtlMs: Number(process.env.RULES_CACHE_TTL_MS || 60000),
+    auth,
   };
 }
 
