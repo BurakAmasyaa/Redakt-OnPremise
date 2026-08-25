@@ -119,6 +119,7 @@ Kurallar uygulamadan değil, **doğrudan SQL'den** yönetilir. Varsayılan tablo
 | `YerineDeger` | Yerine yazılacak değer, ör. `[SIRKET_1]` |
 | `Kategori` | Gruplama (Kisi, Sirket, Proje…) |
 | `Aktif` | `0` yapılan kural uygulanmaz; silmeye gerek yok |
+| `TamEslesme` | `1` yapılan kural bulanık eşleşmez (isteğe bağlı kolon) |
 | `Notlar` | Serbest açıklama |
 
 Uygulama yalnızca `Aktif = 1` olan satırları okur.
@@ -128,10 +129,28 @@ Yeni kural eklendiğinde: sunucu değişikliği en geç bir dakika içinde gör�
 Sayfası zaten açık olan kullanıcı için yeni kural, sayfayı yenilediğinde veya
 kural panelindeki **"Yenile"** düğmesine bastığında etkili olur.
 
-**Eşleştirme büyük/küçük harfe duyarsızdır**, Türkçe karakter varyantlarını eşdeğer
-sayar (`Şen` ≈ `Sen`) ve yazım hatası tolere eder: kısa ifadelerde 1, uzun
-ifadelerde 2 karakter. Yani `ALFA-2026` kuralı `ALFA-2027`'yi de yakalayabilir —
-kod adları gibi birebir eşleşmesi gereken kurallarda buna dikkat edin.
+**Eşleştirme büyük/küçük harfe duyarsızdır** ve Türkçe karakter varyantlarını
+eşdeğer sayar (`Şen` ≈ `Sen`). Ayrıca yazım hatası tolere eder ve **bu toleransın
+bedeli vardır**: tolerans kelime uzunluğuna göre ölçeklenir —
+
+| Kelime uzunluğu | Tolerans | Sonuç |
+|---|---|---|
+| 5 harften kısa | 0 | `Ak` kuralı yalnızca `Ak`'ı yakalar |
+| 5–7 harf | 1 harf | `Siskon` kuralı `Diskon`'u da yakalar |
+| 8 harf ve üzeri | 2 harf | `ALFA-2026` kuralı `ALFA-2027`'yi de yakalar |
+
+Kısa marka ve kod adlarında bu gevşeklik belgeyi sessizce bozar: bir otomasyon
+belgesinde geçen her `piston` şirket adı sanılabilir. Birebir eşleşmesi gereken
+kurallarda `TamEslesme = 1` yapın — o kural artık hiç bulanıklaşmaz, ama büyük-küçük
+harf ve Türkçe karakter esnekliğini korur.
+
+```sql
+ALTER TABLE dbo.RedaktKurallari ADD TamEslesme bit NOT NULL DEFAULT 0;
+UPDATE dbo.RedaktKurallari SET TamEslesme = 1 WHERE AranacakIfade IN (N'Siskon', N'ALFA-2026');
+```
+
+Kolon yoksa uygulama eskisi gibi çalışır (tüm kurallar bulanık). `redakt-check`
+kolonun var olup olmadığını ve riskli kısa kuralları listeler.
 
 Aynı ifade için farklı değer taşıyan iki kural varsa sunucu bunu log'a uyarı
 olarak yazar ve kullanıcıya bildirir.

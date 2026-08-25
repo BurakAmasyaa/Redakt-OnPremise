@@ -7,17 +7,49 @@ function qualifiedTable(name) {
   return name;
 }
 
-export function createRulesRepository({ dbConfig, table, cacheTtlMs = 60000 }) {
+// TamEslesme kolonu isteğe bağlıdır: mevcut kurulumlarda tablo onsuz da
+// çalışmalı. Kolon yoksa tüm kurallar eski davranışı sürdürür (bulanık eşleşme).
+const EXACT_COLUMN = "TamEslesme";
+
+function tableParts(name) {
+  const [schema, table] = name.split(".").map((part) => part.replace(/^\[|\]$/gu, ""));
+  return { schema, table };
+}
+
+export function createRulesRepository({ dbConfig, table, cacheTtlMs = 60000, logger = null }) {
   const source = qualifiedTable(table);
+  const { schema, table: tableName } = tableParts(source);
   let cache = null;
+  let hasExactColumn = null;
+
+  async function detectExactColumn() {
+    if (hasExactColumn !== null) return hasExactColumn;
+    const pool = await getPool(dbConfig);
+    const result = await pool.request()
+      .input("schema", schema)
+      .input("table", tableName)
+      .input("column", EXACT_COLUMN)
+      .query(`
+        SELECT 1 AS present FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = @schema AND TABLE_NAME = @table AND COLUMN_NAME = @column`);
+    hasExactColumn = result.recordset.length > 0;
+    logger?.info(hasExactColumn
+      ? `${EXACT_COLUMN} kolonu bulundu; kural bazında tam eşleşme etkin`
+      : `${EXACT_COLUMN} kolonu yok; tüm kurallar bulanık eşleşmeyle çalışıyor`);
+    return hasExactColumn;
+  }
 
   async function readVersion() {
     const pool = await getPool(dbConfig);
+    const exact = await detectExactColumn();
+    // Etag bayrağı da kapsamalı; yoksa TamEslesme değişince istemci
+    // 304 alıp eski kural listesini kullanmaya devam eder.
+    const checksumColumns = `Id, AranacakIfade, YerineDeger, Kategori, Aktif${exact ? `, ${EXACT_COLUMN}` : ""}`;
     const result = await pool.request().query(`
       SELECT
         COUNT_BIG(*) AS total,
         SUM(CASE WHEN Aktif = 1 THEN 1 ELSE 0 END) AS active,
-        CHECKSUM_AGG(BINARY_CHECKSUM(Id, AranacakIfade, YerineDeger, Kategori, Aktif)) AS checksum
+        CHECKSUM_AGG(BINARY_CHECKSUM(${checksumColumns})) AS checksum
       FROM ${source}`);
     const row = result.recordset[0];
     return {
@@ -29,8 +61,9 @@ export function createRulesRepository({ dbConfig, table, cacheTtlMs = 60000 }) {
 
   async function readRules() {
     const pool = await getPool(dbConfig);
+    const exact = await detectExactColumn();
     const result = await pool.request().query(`
-      SELECT Id, AranacakIfade, YerineDeger, Kategori, Notlar
+      SELECT Id, AranacakIfade, YerineDeger, Kategori, Notlar${exact ? `, ${EXACT_COLUMN}` : ""}
       FROM ${source}
       WHERE Aktif = 1 AND AranacakIfade IS NOT NULL AND YerineDeger IS NOT NULL
       ORDER BY Id`);
@@ -41,6 +74,7 @@ export function createRulesRepository({ dbConfig, table, cacheTtlMs = 60000 }) {
         replacement: String(row.YerineDeger).trim(),
         category: row.Kategori ? String(row.Kategori) : null,
         notes: row.Notlar ? String(row.Notlar) : null,
+        exact: exact ? Boolean(row[EXACT_COLUMN]) : false,
       }))
       .filter((rule) => rule.find && rule.replacement);
   }
@@ -69,6 +103,7 @@ export function createRulesRepository({ dbConfig, table, cacheTtlMs = 60000 }) {
     cache = {
       etag: version.etag,
       total: version.total,
+      exactColumn: hasExactColumn,
       rules,
       duplicates: findDuplicates(rules),
       fetchedAt: Date.now(),

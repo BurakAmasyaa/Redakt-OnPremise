@@ -20,6 +20,9 @@ function toRules(payload) {
       find: String(rule.find ?? "").trim(),
       replacement: String(rule.replacement ?? "").trim(),
       category: rule.category ? String(rule.category) : null,
+      // TamEslesme = 1 olan kural bulanık eşleşmeye kapalıdır. Kısa marka
+      // adlarında ("Siskon") bulanıklık "Piston"u da maskeler.
+      exact: Boolean(rule.exact),
     }))
     .filter((rule) => rule.find && rule.replacement);
 }

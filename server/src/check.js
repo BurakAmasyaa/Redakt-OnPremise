@@ -112,6 +112,20 @@ try {
   const categories = new Map();
   for (const rule of snapshot.rules) categories.set(rule.category || "(yok)", (categories.get(rule.category || "(yok)") || 0) + 1);
   console.log(`   Kategoriler: ${[...categories].map(([k, v]) => `${k}=${v}`).join(", ")}`);
+  if (snapshot.exactColumn) {
+    const exactCount = snapshot.rules.filter((rule) => rule.exact).length;
+    report(true, "TamEslesme kolonu var", `${exactCount} kural tam eşleşmeye kilitli, ${snapshot.rules.length - exactCount} kural bulanık eşleşiyor.`);
+  } else {
+    report(true, "TamEslesme kolonu yok", "Tüm kurallar bulanık eşleşiyor. Birebir eşleşmesi gereken kod/marka adları için\n   ALTER TABLE ... ADD TamEslesme bit NOT NULL DEFAULT 0  ekleyip ilgili satırlarda 1 yapın.");
+  }
+  // Kısa ifadeler bulanık eşleşmede alakasız kelimeleri yakalar; kurulumu yapan
+  // kişi bunu belgeler bozulmadan önce görmeli.
+  const risky = snapshot.rules.filter((rule) => !rule.exact
+    && rule.find.split(/[^\p{L}\p{N}]+/u).some((token) => token.length >= 5 && token.length < 8));
+  if (risky.length) {
+    report(true, `${risky.length} kural bulanık eşleşme riski taşıyor`,
+      `Kısa ifadelerde 1 harf farkı hâlâ eşleşir (ör. "Siskon" → "Diskon").\n   ${risky.slice(0, 8).map((rule) => `"${rule.find}"`).join(", ")}${risky.length > 8 ? " …" : ""}\n   Birebir eşleşmesi gerekenlerde TamEslesme = 1 yapın.`);
+  }
   if (snapshot.duplicates.length) {
     report(false, "Çakışan kurallar var", snapshot.duplicates.map((d) => `"${d.find}" → ${d.ids.join(", ")}`).join("\n"));
   } else {

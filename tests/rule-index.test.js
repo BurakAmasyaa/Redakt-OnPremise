@@ -14,7 +14,7 @@ import {
 function referenceDetect(units, rules, unitOffset = 0) {
   const tokensOf = (value) => [...String(value).matchAll(/[\p{L}\p{N}]+/gu)]
     .map((match) => ({ normalized: normalizeTurkishForComparison(match[0]), start: match.index, end: match.index + match[0].length }));
-  const tolerance = (token) => ([...token].length < 6 ? 1 : 2);
+  const tolerance = (token, exact) => (exact || [...token].length < 5 ? 0 : ([...token].length < 8 ? 1 : 2));
 
   return normalizeImportedRules(rules).map((rule, ruleIndex) => {
     const ruleTokens = tokensOf(rule.comparison);
@@ -26,7 +26,7 @@ function referenceDetect(units, rules, unitOffset = 0) {
       for (let position = 0; position <= tokens.length - ruleTokens.length; position += 1) {
         const candidate = tokens.slice(position, position + ruleTokens.length);
         const matched = ruleTokens.every((ruleToken, index) =>
-          levenshteinDistance(ruleToken.normalized, candidate[index].normalized, tolerance(ruleToken.normalized)) <= tolerance(ruleToken.normalized));
+          levenshteinDistance(ruleToken.normalized, candidate[index].normalized, tolerance(ruleToken.normalized, rule.exact)) <= tolerance(ruleToken.normalized, rule.exact));
         if (!matched) continue;
         const matchedText = text.slice(candidate[0].start, candidate.at(-1).end);
         variants.add(matchedText);

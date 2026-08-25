@@ -6,7 +6,7 @@ function validateRule(rule, index) {
     throw new Error(`${index + 1}. özel kuralda hem “Bul” hem “Şununla değiştir” alanını doldurun.`);
   }
   if (find === replacement) throw new Error(`${index + 1}. özel kuralda aranan ve yeni değer aynı olamaz.`);
-  return { id: rule.id || `rule_${index + 1}`, find, replacement };
+  return { id: rule.id || `rule_${index + 1}`, find, replacement, exact: Boolean(rule.exact) };
 }
 
 export function normalizeCustomRules(rules) {
@@ -62,8 +62,15 @@ function comparisonTokens(value) {
   return tokens;
 }
 
-function tokenTolerance(token) {
-  return [...token].length < 6 ? 1 : 2;
+// Bulanıklık kelime uzunluğuna göre ölçeklenir. Kısa kelimede tek harflik
+// tolerans bile felakettir: "Ak" kuralı "Ok"u, "Merve" kuralı "Serve"i yakalar.
+// Beş harften kısa kelimede hiç bulanıklık yoktur; asıl çözüm kuralın kendi
+// TamEslesme anahtarıdır (SQL tablosunda TamEslesme = 1).
+export function tokenTolerance(token, exact = false) {
+  if (exact) return 0;
+  const length = [...token].length;
+  if (length < 5) return 0;
+  return length < 8 ? 1 : 2;
 }
 
 export function normalizeImportedRules(rules) {
@@ -120,9 +127,9 @@ export function buildImportedRuleIndex(rules) {
       if (tokens[index].normalized.length > tokens[anchorOffset].normalized.length) anchorOffset = index;
     }
     const anchor = tokens[anchorOffset].normalized;
-    const entry = { rule, ruleIndex, tokens, anchorOffset };
+    const entry = { rule, ruleIndex, tokens, anchorOffset, exact: Boolean(rule.exact) };
     entries.push(entry);
-    for (const variant of deletionVariants(anchor, tokenTolerance(anchor))) {
+    for (const variant of deletionVariants(anchor, tokenTolerance(anchor, entry.exact))) {
       const bucket = byVariant.get(variant);
       if (bucket) bucket.push(entry);
       else byVariant.set(variant, [entry]);
@@ -136,7 +143,7 @@ function matchesAt(entry, documentTokens, startIndex) {
   if (startIndex < 0 || startIndex + entry.tokens.length > documentTokens.length) return false;
   for (let index = 0; index < entry.tokens.length; index += 1) {
     const ruleToken = entry.tokens[index].normalized;
-    const tolerance = tokenTolerance(ruleToken);
+    const tolerance = tokenTolerance(ruleToken, entry.exact);
     if (levenshteinDistance(ruleToken, documentTokens[startIndex + index].normalized, tolerance) > tolerance) return false;
   }
   return true;
@@ -205,6 +212,7 @@ export function detectImportedRules(units, rules, options = {}) {
       replacementText: rule.replacement,
       normalized: rule.comparison,
       count: record.locations.length,
+      exact: Boolean(rule.exact),
       confidence: "exact",
       placeholder: rule.replacement,
       variants: [...record.variants],
