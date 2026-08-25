@@ -370,6 +370,9 @@ gerekiyor; Internet Explorer ve eski Edge çalışmaz.
 
 ## Lisans ve model
 
+Yazılım tescillidir ve şirket içi kullanım için lisanslanır; koşullar
+[LICENSE](LICENSE) dosyasındadır.
+
 NER modeli `akdeniz27/bert-base-turkish-cased-ner` temel alınarak q4 nicemlenmiş
 ONNX biçimine dönüştürülmüştür (kaynak model kartındaki beyana göre MIT).
 Model ve OCR dosyaları uygulama ile aynı kaynaktan yüklenir; çalışma anında
