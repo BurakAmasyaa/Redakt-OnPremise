@@ -16,3 +16,19 @@ screenshots/
 # Kurulum paketi (build çıktısı)
 package/
 logs/
+dist-guard
+
+# Guard eklentisi — public depoya asla çıkmaz (kaynak + imzalı paket + özel anahtar)
+guard/
+tests/guard.test.js
+dist-guard/
+dist-guard.crx
+dist-guard.pem
+
+# İmza anahtarları ve imzalı paketler
+*.pem
+*.crx
+*.key
+
+# Claude Code yerel worktree kopyaları (199 MB)
+.claude/worktrees/
