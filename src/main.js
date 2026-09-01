@@ -842,6 +842,9 @@ async function handleFile(file, { backgroundQueue = false } = {}) {
     tracker.start("reviewPreparation", 1);
     tracker.advance(1);
     if (backgroundQueue && state.currentQueueItem) {
+      // Uyarı dosyaya iliştirilir: toplu taramada inceleme ekranı hiç
+      // açılmadığı için "isimler aranamadı" uyarısı kullanıcıya ulaşmıyordu.
+      state.currentQueueItem.scanWarning = nerWarning;
       state.currentQueueItem.findings = combinedFindings;
       state.currentQueueItem.replacementPlan = replacementPlan;
       state.currentQueueItem.selectedFindingIds = combinedFindings.map((finding) => finding.id);
@@ -869,7 +872,11 @@ async function handleFile(file, { backgroundQueue = false } = {}) {
     setProcessing(false);
     document.title = DEFAULT_DOCUMENT_TITLE;
     finishOperation("scan", controller);
-    showScanWarning(nerWarning);
+    if (backgroundQueue) {
+      // Toplu modda inceleme paneli görünmez; uyarı hem bildirimle duyurulur
+      // hem de dosyanın kendi panelinde saklanır.
+      if (nerWarning) showError(`${file.name}: ${nerWarning.title}`);
+    } else showScanWarning(nerWarning);
   }
   return succeeded;
 }
@@ -1523,6 +1530,7 @@ async function toggleQueueItemNow(requestedItem) {
   wrapper.append(panel);
   wrapper.classList.add("is-expanded");
   wrapper.querySelector(".queue-row-open")?.setAttribute("aria-expanded", "true");
+  showScanWarning(item.scanWarning || null);
   renderReview({
     inline: true,
     reviewState: { filename: item.file.name, findings: item.findings },
@@ -1935,7 +1943,11 @@ elements.processingCancel.addEventListener("click", () => {
     return;
   }
   if (!operationCoordinator.abort("export", new DOMException("İşlem iptal edildi.", "AbortError"))) {
-    state.cancelledScan = true;
+    // Bayrak yalnızca gerçekten bir kuyruk dosyası taranırken kalkar. Dosya
+    // DOĞRULAMASI sırasında iptal edildiğinde advanceQueue hiç koşmadığı için
+    // bayrak açık kalıyor, bir SONRAKİ başarılı tarama iptal sayılıp çöpe
+    // atılıyor ve kullanıcı çıkışsız bir ekranda kalıyordu.
+    state.cancelledScan = Boolean(state.currentQueueItem);
     operationCoordinator.abort("scan", new DOMException("İşlem iptal edildi.", "AbortError"));
   }
   setProcessing(false);
@@ -1981,11 +1993,35 @@ window.addEventListener("dragleave", (event) => {
   dragDepth = Math.max(0, dragDepth - 1);
   if (dragDepth === 0) hideDragFollower();
 });
+// İnceleme, bitiş ya da toplu sahnedeyken pencereye dosya bırakmak kuyruğu
+// değiştiriyor ama sahne değişmiyordu: kullanıcı eski ekranda, artık var
+// olmayan bir kuyrukla, hiçbir düğmesi çalışmayan bir görüntüde kalıyordu.
+// Yeni dosya baştan başlamak demektir; kendi kuralların korunur.
+async function returnToUploadStage() {
+  if (!elements.uploadStage.hidden) return;
+  revokeDownloads();
+  await closeQueueAccordion();
+  await releaseContext();
+  state.findings = [];
+  state.replacementPlan = [];
+  state.activeQueueItem = null;
+  state.expandedQueueItemId = null;
+  state.batchMode = false;
+  state.batchScanning = false;
+  state.bulkDownloadComplete = false;
+  state.activeFindingCategory = null;
+  showScanWarning(null);
+  elements.reviewStage.append(elements.reviewControls);
+  showStage(elements.uploadStage);
+}
+
 window.addEventListener("drop", (event) => {
   event.preventDefault();
   dragDepth = 0;
   hideDragFollower();
-  if (event.dataTransfer.files.length) selectFiles(event.dataTransfer.files);
+  const files = [...event.dataTransfer.files];
+  if (!files.length) return;
+  returnToUploadStage().then(() => selectFiles(files));
 });
 
 elements.selectAll.addEventListener("change", () => {
