@@ -1,4 +1,4 @@
-import { aggregateFindings, replacementsForText } from "./pii.js";
+import { aggregateFindings, redactedOutputFilename, replacementsForText } from "./pii.js";
 import {
   buildOcrImageText,
   canvasBytes,
@@ -56,7 +56,7 @@ export async function redactImage(context, replacementMap, options = {}) {
   const drawing = canvas.getContext("2d");
   if (!drawing) throw new Error("Görsel maskelenemedi.");
   drawing.drawImage(source, 0, 0, width, height);
-  const matches = replacementsForText(context.image.text, replacementMap, { unitIndex: 0 });
+  const matches = replacementsForText(context.image.text, replacementMap);
   paintRedactions(drawing, ocrSegments(context.image, matches));
   const output = await canvasBytes(canvas, context.mimeType);
   source.close?.();
@@ -65,8 +65,8 @@ export async function redactImage(context, replacementMap, options = {}) {
   return output;
 }
 
-function outputImageFilename(filename) {
-  return filename.replace(/(\.[^.]+)$/u, "_redakte$1");
+function outputImageFilename(filename, replacementMap = null) {
+  return redactedOutputFilename(filename, replacementMap);
 }
 
 export const imageAdapter = Object.freeze({

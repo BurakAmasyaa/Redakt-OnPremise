@@ -4,6 +4,7 @@ import {
   aggregateFindings,
   createReplacementMap,
   NUMERIC_SAFE_CATEGORIES,
+  redactedOutputFilename,
   replaceText,
 } from "./pii.js";
 import { redactEmbeddedImages, scanEmbeddedImages } from "./office-images.js";
@@ -407,21 +408,18 @@ export async function redactXlsx(context, replacementMap, options = {}) {
   for (const entry of cells) {
     const { cell, text, address, sheetName, numeric, field, unitIndex } = entry;
     const source = field === "f" ? rewriteSheetReferences(text, renames) : text;
-    const replaced = replaceText(source, replacementMap, {
-      ...(unitIndex === undefined ? {} : { unitIndex }),
-      ...(numeric ? { categories: NUMERIC_SAFE_CATEGORIES } : {}),
-    });
+    const replaced = replaceText(source, replacementMap, numeric ? { categories: NUMERIC_SAFE_CATEGORIES } : {});
     if (replaced === text) continue;
     if (field === "f") {
       cell.f = replaced;
-      formulaChanged.add(`${sheetName} ${address}`);
+      formulaChanged.add(`${sheetName}\u0000${address}`);
     } else {
       cell.v = replaced;
       cell.t = "s";
       delete cell.w;
       delete cell.r;
       delete cell.h;
-      valueChanged.add(`${sheetName} ${address}`);
+      valueChanged.add(`${sheetName}\u0000${address}`);
     }
     markModified(sheetName, address);
   }
@@ -430,7 +428,7 @@ export async function redactXlsx(context, replacementMap, options = {}) {
   // açtığında formülü yeniden hesaplar ve orijinali geri getirir. O formül düşer.
   for (const key of valueChanged) {
     if (formulaChanged.has(key)) continue;
-    const [sheetName, address] = key.split(" ");
+    const [sheetName, address] = key.split("\u0000");
     const cell = context.workbook.Sheets[sheetName]?.[address];
     if (cell?.f) delete cell.f;
   }
@@ -472,12 +470,13 @@ export async function redactOffice(context, findings, selectedIds, options = {})
   return {
     bytes,
     mimeType: context.kind === "docx" ? DOCX_MIME : context.kind === "xlsx" ? XLSX_MIME : PDF_MIME,
-    filename: outputFilename(context.filename),
+    filename: outputFilename(context.filename, replacementMap),
   };
 }
 
-export function outputFilename(filename) {
-  return filename.replace(/(\.[^.]+)$/u, "_redakte$1");
+// Maskeleme haritası verildiğinde ad da belgeyle aynı yer tutucularla yazılır.
+export function outputFilename(filename, replacementMap = null) {
+  return redactedOutputFilename(filename, replacementMap);
 }
 
 export const docxAdapter = Object.freeze({

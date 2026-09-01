@@ -1,5 +1,5 @@
 import { PDFDocument } from "pdf-lib";
-import { aggregateFindings, replacementsForText } from "./pii.js";
+import { aggregateFindings, redactedOutputFilename, replacementsForText } from "./pii.js";
 import { processingConfig } from "./profiles.js";
 
 const PDF_MIME = "application/pdf";
@@ -128,6 +128,31 @@ async function openPdf(bytes) {
   }
 }
 
+
+// PDF form alanları (AcroForm) metin katmanında DEĞİLDİR: getTextContent onları
+// hiç görmez. Ama düzleştirilmiş çıktı sayfayı çizerken alanın görünümünü de
+// basar — yani değer taranmadan, bulgu listesinde görünmeden, okunur biçimde
+// çıktıya gider. Bir başvuru formunda bu, formun tamamının sızması demektir.
+function annotationValues(annotation) {
+  const values = [];
+  for (const candidate of [annotation?.fieldValue, annotation?.buttonValue, annotation?.alternativeText]) {
+    if (Array.isArray(candidate)) values.push(...candidate.map(String));
+    else if (typeof candidate === "string") values.push(candidate);
+  }
+  for (const object of [annotation?.contentsObj, annotation?.titleObj]) {
+    if (typeof object?.str === "string") values.push(object.str);
+  }
+  return values.filter((value) => value.trim());
+}
+
+async function pageAnnotations(page) {
+  try {
+    return await page.getAnnotations({ intent: "display" });
+  } catch {
+    return [];
+  }
+}
+
 export async function scanPdf(arrayBuffer, filename, options = {}) {
   const bytes = normalizedBytes(arrayBuffer);
   const { runtime, document: pdfDocument, loadingTask } = await openPdf(bytes);
@@ -176,7 +201,9 @@ export async function scanPdf(arrayBuffer, filename, options = {}) {
       }
 
       totalCharacters += pageMap.text.replace(/\s/gu, "").length;
-      pages.push({ ...pageMap, pageNumber, width: viewport.width, height: viewport.height });
+      const formValues = (await pageAnnotations(page)).flatMap(annotationValues);
+      totalCharacters += formValues.join("").replace(/\s/gu, "").length;
+      pages.push({ ...pageMap, pageNumber, width: viewport.width, height: viewport.height, formValues });
       page.cleanup();
     }
   } finally {
@@ -194,7 +221,20 @@ export async function scanPdf(arrayBuffer, filename, options = {}) {
 
   const units = pages
     .filter((page) => page.text.trim())
-    .map((page) => ({ text: page.text, location: { kind: "pdf", pageNumber: page.pageNumber } }));
+    // Kayıtların konumu maskeleme kutularını boyamak için zaten tutuluyor;
+    // aynı konum, sütun başlıklı tabloda etiketi değerle eşlemeye de yarar.
+    .map((page) => ({
+      text: page.text,
+      location: { kind: "pdf", pageNumber: page.pageNumber },
+      layout: page.records,
+    }));
+  // Form alanı değerleri kendi birimleri olur: bulgu listesinde görünürler,
+  // sayıma girerler ve maskeleme sırasında kutuları kapatılır.
+  for (const page of pages) {
+    for (const value of page.formValues || []) {
+      units.push({ text: value, location: { kind: "pdf-form", pageNumber: page.pageNumber } });
+    }
+  }
   const texts = units.map((unit) => unit.text);
   return {
     context: {
@@ -382,6 +422,22 @@ export async function redactPdf(context, replacementMap, options = {}) {
         paintRedactions(canvasContext, matchSegments(pageMap, matches, viewport, runtime.Util, canvasContext), renderScale);
       }
 
+      // Eşleşen form alanının kutusu bütünüyle kapatılır. Alanın kendi
+      // görünüm akışında glif konumu yok; harf harf boyamak yerine kutuyu
+      // kapatmak hem kesin hem de bir form alanında görsel olarak doğrudur.
+      for (const annotation of await pageAnnotations(page)) {
+        const rect = annotation?.rect;
+        if (!Array.isArray(rect) || rect.length < 4) continue;
+        const values = annotationValues(annotation);
+        if (!values.some((value) => replacementsForText(value, replacementMap).length)) continue;
+        const [a, b, c, d, e, f] = viewport.transform;
+        const toCanvas = (x, y) => [a * x + c * y + e, b * x + d * y + f];
+        const [x1, y1] = toCanvas(rect[0], rect[1]);
+        const [x2, y2] = toCanvas(rect[2], rect[3]);
+        canvasContext.fillStyle = "#000000";
+        canvasContext.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+      }
+
       const jpeg = await output.embedJpg(await canvasToJpeg(canvas));
       const outputPage = output.addPage([baseViewport.width, baseViewport.height]);
       outputPage.drawImage(jpeg, { x: 0, y: 0, width: baseViewport.width, height: baseViewport.height });
@@ -398,8 +454,8 @@ export async function redactPdf(context, replacementMap, options = {}) {
 
 export { PDF_MIME };
 
-function outputPdfFilename(filename) {
-  return filename.replace(/(\.[^.]+)$/u, "_redakte$1");
+function outputPdfFilename(filename, replacementMap = null) {
+  return redactedOutputFilename(filename, replacementMap);
 }
 
 export const pdfAdapter = Object.freeze({

@@ -180,7 +180,7 @@ export async function redactEmbeddedImages(zip, images = [], replacementMap, opt
   for (let index = 0; index < images.length; index += 1) {
     throwIfAborted(options.signal);
     const image = images[index];
-    const matches = replacementsForText(image.text, replacementMap, { unitIndex: image.unitIndex });
+    const matches = replacementsForText(image.text, replacementMap);
     if (!matches.length) continue;
     const entry = zip.file(image.path);
     if (!entry) continue;

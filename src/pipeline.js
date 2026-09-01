@@ -41,7 +41,7 @@ export async function applyDocumentChanges(context, findings, selectedIds, optio
   return {
     bytes,
     mimeType: context.mimeType || adapter.mimeType,
-    filename: adapter.outputFilename(context.filename),
+    filename: adapter.outputFilename(context.filename, replacementMap),
   };
 }
 

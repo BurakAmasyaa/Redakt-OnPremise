@@ -10,7 +10,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import * as XLSX from "xlsx";
 import { detectCustomRules } from "../src/custom-rules.js";
 import { estimateXlsxRows, redactOffice, scanOffice, scanOfficeNamedEntities } from "../src/office.js";
-import { createReplacementMap, replacementsForText } from "../src/pii.js";
+import { countPlannedReplacements, createReplacementMap, replacementsForText } from "../src/pii.js";
 
 globalThis.DOMParser = DOMParser;
 globalThis.XMLSerializer = XMLSerializer;
@@ -404,4 +404,36 @@ test("karma PDF'te yalnız taranmış sayfaları tek worker ile sırayla OCR'a g
   assert.equal(terminated, 1);
   assert.equal(maxActiveRecognitions, 1);
   assert.equal(scanned.findings.find((finding) => finding.value === "text@example.com")?.count, 1);
+});
+
+// Varlık bulguları eskiden yalnızca modelin onları GÖRDÜĞÜ birime
+// uygulanıyordu. XLSX her hücreyi ayrı birim olarak maskelediği için A1'de
+// bulunan ad B3'te maskesiz kalıyor, sayım ise bütün hücreleri saydığından
+// rapor "3 kullanım" derken çalışma kitabında 1 değişiklik oluyordu.
+test("XLSX: bir hücrede bulunan ad bütün çalışma kitabında maskelenir", async () => {
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ["Ad", "Melis Demir"],
+    ["Onay", "Melis Demir onayladı"],
+    ["Not", "melis demir ayrıca ekledi"],
+  ]);
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, sheet, "Sayfa1");
+  const { context } = await scanOffice(XLSX.write(book, { type: "array", bookType: "xlsx" }), "liste.xlsx");
+
+  const finding = {
+    id: "ner_1", source: "ner", category: "person", label: "Kişi adı", value: "Melis Demir",
+    variants: ["Melis Demir"], normalized: "melis demir",
+    placeholder: "[KISI_1]", replacementText: "[KISI_1]", confidence: "probable",
+    // Model adı yalnızca tek bir hücrede gördü.
+    count: 1, locations: [{ unitIndex: 0 }],
+  };
+  const beklenen = countPlannedReplacements(context.units, [finding]).get("ner_1");
+  const bytes = await redactOffice(context, [finding], ["ner_1"]);
+  const geri = XLSX.read(bytes.bytes, { type: "array" }).Sheets.Sayfa1;
+  const hucreler = ["B1", "B2", "B3"].map((address) => String(geri[address]?.v ?? ""));
+  const uygulanan = hucreler.filter((value) => value.includes("[KISI_1]")).length;
+
+  assert.equal(uygulanan, 3, `ad maskelenmemiş hücre kaldı: ${JSON.stringify(hucreler)}`);
+  assert.equal(uygulanan, beklenen, "rapor ile çalışma kitabı tutmuyor");
+  assert.ok(!hucreler.join(" ").match(/melis/iu), "ad çalışma kitabında kaldı");
 });

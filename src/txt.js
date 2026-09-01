@@ -1,4 +1,4 @@
-import { aggregateFindings, replaceText } from "./pii.js";
+import { aggregateFindings, redactedOutputFilename, replaceText } from "./pii.js";
 
 const TXT_MIME = "text/plain;charset=utf-8";
 const UTF8_BOM = new Uint8Array([0xef, 0xbb, 0xbf]);
@@ -45,8 +45,8 @@ export async function redactTxt(context, replacementMap) {
   return output;
 }
 
-function outputTxtFilename(filename) {
-  return filename.replace(/(\.[^.]+)$/u, "_redakte$1");
+function outputTxtFilename(filename, replacementMap = null) {
+  return redactedOutputFilename(filename, replacementMap);
 }
 
 export const txtAdapter = Object.freeze({
