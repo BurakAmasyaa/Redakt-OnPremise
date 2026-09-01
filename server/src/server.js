@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
+import { AuditInputError, auditLogFields, normalizeMaskingAudit, readAuditJson } from "./audit.js";
 import { AUTH_RESULT, createAuthenticator } from "./auth.js";
 import { buildInfo, versionLine } from "./build-info.js";
 import { loadDatabaseConfig, loadEnvFile, loadLogConfig, loadServerConfig, loadTlsConfig } from "./config.js";
@@ -200,6 +201,32 @@ async function handleRules(request, response) {
   }
 }
 
+async function handleMaskingAudit(request, response) {
+  // Kimlik istemciden kabul edilmez. AUTH_MODE=none audit için yeterli değildir;
+  // aksi hâlde "hangi kullanıcı" alanı güvenilir olmaz.
+  if (!request.user) {
+    sendJson(response, 503, {
+      message: "Audit kaydı için AUTH_MODE=proxy ve doğrulanmış kullanıcı kimliği gerekli.",
+      requestId: request.requestId,
+    });
+    return;
+  }
+  try {
+    const event = normalizeMaskingAudit(await readAuditJson(request));
+    logger.info("Guard otomatik maskeleme tamamlandı", auditLogFields(event, {
+      user: request.user,
+      requestId: request.requestId,
+    }));
+    sendJson(response, 202, { accepted: true, eventId: event.eventId, requestId: request.requestId });
+  } catch (error) {
+    if (error instanceof AuditInputError) {
+      sendJson(response, error.status, { message: error.message, requestId: request.requestId });
+      return;
+    }
+    throw error;
+  }
+}
+
 async function handleRequest(request, response) {
   // Her isteğe kimlik: kullanıcı "hata aldım" dediğinde ilgili kaydı
   // log'da bulmanın tek pratik yolu budur. Yanıt başlığında da döner.
@@ -221,8 +248,9 @@ async function handleRequest(request, response) {
   });
 
   try {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      sendJson(response, 405, { message: "Yalnızca GET desteklenir." });
+    const maskingAuditPost = pathname === "/api/audit/masking" && request.method === "POST";
+    if (request.method !== "GET" && request.method !== "HEAD" && !maskingAuditPost) {
+      sendJson(response, 405, { message: "Bu uç noktada yöntem desteklenmiyor." });
       return;
     }
     if (authenticator.required && !OPEN_PATHS.has(pathname)) {
@@ -237,6 +265,13 @@ async function handleRequest(request, response) {
     if (pathname === "/api/health") return handleHealth(request, response);
     if (pathname === "/api/ready") return await handleReady(request, response);
     if (pathname === "/api/rules") return await handleRules(request, response);
+    if (pathname === "/api/audit/masking") {
+      if (request.method !== "POST") {
+        sendJson(response, 405, { message: "Audit uç noktası yalnızca POST destekler." });
+        return;
+      }
+      return await handleMaskingAudit(request, response);
+    }
     if (pathname.startsWith("/api/")) {
       sendJson(response, 404, { message: "Bilinmeyen uç nokta." });
       return;

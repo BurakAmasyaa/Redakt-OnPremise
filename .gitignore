@@ -38,3 +38,6 @@ dist-guard.pem
 # izleri ve hesap adları içerir; depoya girmez. Genel geçer olan kısımları
 # server/scripts/KURULUM.md ve deploy/iis altına işlenir.
 Redakt_Ekler/
+
+# Claude Code yerel çalıştırma yapılandırması
+.claude/launch.json

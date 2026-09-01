@@ -23,12 +23,14 @@ Kullanıcının tarayıcısı                    Şirket sunucusu           Şir
   Metin çıkarılır
   Regex + NER çalışır
   Kurallar uygulanır    ◀────── kural listesi ──── /api/rules ◀───── SELECT
+  Güvenli audit özeti   ─────── kategori/adet ───▶ /api/audit/masking
   Maskelenmiş dosya
   indirilir
 ```
 
-Sunucu iki iş yapar: **uygulamayı sunmak** ve **kural listesini okumak**.
-Belge içeriği ne sunucuya gider, ne SQL'e yazılır, ne log'a düşer.
+Sunucu uygulamayı sunar, kural listesini okur ve Guard kullanıldığında yalnızca
+maskeleme sayaçlarını audit log'una yazar. Belge içeriği, dosya adı, prompt,
+gerçek ad/e-posta/telefon ne sunucuya gider, ne SQL'e yazılır, ne log'a düşer.
 
 **Model nerede duruyor.** Dil modeli (~147 MB) ilk taramada sunucudan bir kez
 indirilir ve kullanıcının tarayıcı profilinin Cache Storage deposunda
@@ -37,10 +39,10 @@ tarayıcı profiline taşınmaz. Tarama ekranı bunu — kaynak adres, boyut ve 
 indirilmediği — açıkça yazar ve **Cihazdan kaldır** düğmesiyle silmeyi sunar.
 
 Bu sınır kodda gevşetilmemesi gereken bir kuraldır ve testle korunur
-([tests/privacy.test.js](tests/privacy.test.js)): belgeyi işleyen 16 modülde ağ
-erişimi ve kalıcı depolama yasaktır, ağ erişimi yalnızca
-[src/rule-source.js](src/rule-source.js) içinde bulunabilir ve orada da tek
-yönlüdür — gövdesiz `GET`, yalnızca `/api/rules`.
+([tests/privacy.test.js](tests/privacy.test.js)): belgeyi işleyen modüllerde ağ
+erişimi ve kalıcı depolama yasaktır. Kural kaynağı gövdesiz `GET` ile yalnızca
+`/api/rules`'ı okur; Guard audit ağı ise belgeyi görmeyen service worker'da,
+allowlist'li kategori/adet özetiyle sınırlıdır.
 
 ---
 
@@ -211,6 +213,10 @@ düşmez, gönderimi durdurur.
 Her başarılı maskeleme için sunucuya yalnız kullanıcı kimliğiyle ilişkilendirilen
 kategori/adet özeti yazılır; kullanıcı adı güvenilen ters proxy'den gelir.
 Dosya adı, gerçek bulgu değerleri ve prompt audit gövdesine alınmaz.
+Sunucu adresi henüz yapılandırılmadıysa yerel maskeleme durmaz; PII içermeyen
+audit olayları sunucu bağlanana kadar sınırlı yerel kuyrukta bekler. Yapılandırılmış
+bir kural sunucusuna ulaşılamaması ise sessiz koruma düşüşü sayılır ve gönderimi
+durdurur.
 
 ```bash
 npm run build:guard

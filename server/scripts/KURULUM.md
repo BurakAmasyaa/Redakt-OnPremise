@@ -90,6 +90,8 @@ Parola Windows DPAPI ile şifrelenir; **yalnızca onu üreten hesap çözebilir*
 `AUTH_MODE=none` bırakılırsa `/api/rules` **tüm kurumsal kural listesini
 kimliksiz olarak** döner. O liste müşteri adları, proje kodları ve personel
 isimlerinden oluşur — yani listenin kendisi korunması gereken bir varlıktır.
+Ayrıca Guard'ın `/api/audit/masking` ucu güvenilir kullanıcı kimliği üretemediği
+için `503` döner; kullanıcı bazlı audit ancak `AUTH_MODE=proxy` ile çalışır.
 Ağdaki herhangi bir makine şunu çalıştırıp listeyi indirir:
 
 ```
@@ -153,6 +155,11 @@ location / {
 > kullanıcı isteğine `X-Remote-User: baskasi` ekleyip başkası gibi görünür.
 > Kurulumdan sonra mutlaka sınayın: proxy üzerinden sahte başlıkla istek atın,
 > log'da kendi kullanıcı adınızın göründüğünü doğrulayın.
+
+Guard audit sınaması için, uzantıda Redakt sunucu adresini bağladıktan sonra
+sentetik hassas veri içeren bir dosyayı korunan siteye yükleyin. Günlük log'da
+`Guard otomatik maskeleme tamamlandı` kaydı ve proxy'nin doğruladığı `kullanici`
+alanı görünmelidir. Kayıtta dosya adı veya gerçek hassas değer bulunmamalıdır.
 
 İzleme uçları (`/api/health`, `/api/ready`) kimlik istemez; izleme sistemi
 kimlik başlığı gönderemediği için aksi hâlde servisi ölü sanardı. Bu uçlar

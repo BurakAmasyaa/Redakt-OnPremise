@@ -34,8 +34,9 @@ test("model ve OCR varlıkları yalnızca yerel yollardan yüklenir", async () =
   ].map((relativePath) => fs.access(path.join(root, relativePath))));
 });
 
-// Belgeyi işleyen hiçbir modül ağa erişemez. Ağ erişimi yalnızca rule-source.js'de
-// bulunur ve orada da tek yönlüdür: kural listesi okunur, hiçbir şey gönderilmez.
+// Belgeyi işleyen hiçbir modül ağa erişemez. Kural listesi ayrı bir modülde
+// yalnız okunur; audit ise belge içeriğini görmeyen background tarafından sadece
+// allowlist'li kategori/adet özeti olarak gönderilir.
 const DOCUMENT_MODULES = [
   "src/main.js",
   "src/pipeline.js",
@@ -55,10 +56,31 @@ const DOCUMENT_MODULES = [
   "src/ner-client.js",
   "src/ner-worker.js",
   "src/bulk-export.js",
+  // Guard'ın motor tarafı da aynı sınıra tabidir: belge baytları buradan geçer,
+  // dışarı bir yol açılmamalıdır.
+  "guard/src/engine.js",
+  "guard/src/offscreen.js",
+  "guard/src/audit.js",
 ];
 
-test("belgeyi işleyen modüllerde ağ erişimi ve kalıcı depolama yoktur", async () => {
+// Guard (guard/) depo dışında tutuluyor ama yerelde varken aynı sınıra tabidir.
+// Listede olup diskte olmayanı atlarız; src/ altındakiler ise ZORUNLUDUR —
+// biri kaybolursa sınır sessizce denetimsiz kalırdı.
+async function documentModulesOnDisk() {
+  const present = [];
   for (const modulePath of DOCUMENT_MODULES) {
+    try {
+      await fs.access(path.join(root, modulePath));
+      present.push(modulePath);
+    } catch {
+      assert.ok(!modulePath.startsWith("src/"), `${modulePath} kayıp — sınır denetimsiz kalıyor`);
+    }
+  }
+  return present;
+}
+
+test("belgeyi işleyen modüllerde ağ erişimi ve kalıcı depolama yoktur", async () => {
+  for (const modulePath of await documentModulesOnDisk()) {
     const code = await source(modulePath);
     assert.doesNotMatch(code, /\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\s*\(/u, `${modulePath} ağ çağrısı içeriyor`);
     assert.doesNotMatch(code, /\b(localStorage|sessionStorage|indexedDB)\b/u, `${modulePath} kalıcı depolama kullanıyor`);
