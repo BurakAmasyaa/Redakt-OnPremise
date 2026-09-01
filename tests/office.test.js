@@ -437,3 +437,52 @@ test("XLSX: bir hücrede bulunan ad bütün çalışma kitabında maskelenir", a
   assert.equal(uygulanan, beklenen, "rapor ile çalışma kitabı tutmuyor");
   assert.ok(!hucreler.join(" ").match(/melis/iu), "ad çalışma kitabında kaldı");
 });
+
+// Metin her zaman düğüm içinde durmaz ve gövde her zaman son söz değildir.
+// İçerik denetimi veri deposu (customXml) taranmadığında Word, gövdedeki yer
+// tutucuyu dosya açılırken ORİJİNAL değerle geri dolduruyor: kullanıcı
+// maskelenmiş sandığı belgeyi açtığında veri geri gelmiş oluyor.
+test("DOCX: customXml ve öznitelikte taşınan metin de maskelenir", async () => {
+  const secret = "kerem@ornek.com.tr";
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  zip.file("word/document.xml", '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>'
+    + `<w:p><w:r><w:t>İletişim: ${secret}</w:t></w:r></w:p>`
+    + `<w:p><w:fldSimple w:instr=" MERGEFIELD ${secret} "><w:r><w:t>alan</w:t></w:r></w:fldSimple></w:p>`
+    + `<w:p><w:hyperlink w:tooltip="${secret} adresine yaz"><w:r><w:t>bağlantı</w:t></w:r></w:hyperlink></w:p>`
+    + `<w:p><w:r><w:drawing><wp:docPr descr="Fotoğraf: ${secret}"/></w:drawing></w:r></w:p>`
+    + "</w:body></w:document>");
+  zip.file("customXml/item1.xml", `<?xml version="1.0"?><kayit><eposta>${secret}</eposta><not>Yedek: ${secret}</not></kayit>`);
+  zip.file("docProps/core.xml", `<?xml version="1.0"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"><cp:contentStatus>${secret}</cp:contentStatus></cp:coreProperties>`);
+
+  const { context, findings } = await scanOffice((await zip.generateAsync({ type: "uint8array" })).buffer, "t.docx");
+  const result = await redactOffice(context, findings, findings.map((finding) => finding.id));
+  const output = await JSZip.loadAsync(result.bytes);
+  for (const path of ["word/document.xml", "customXml/item1.xml", "docProps/core.xml"]) {
+    const text = await output.file(path).async("string");
+    assert.ok(!text.includes(secret), `${path} maskelenmedi`);
+  }
+});
+
+// Sayfanın bildirdiği aralık gerçeği yansıtmayabilir: "A1:A1" derken B5'te veri
+// durabilir. Aralık gezilerek okunduğunda o hücreler hiç taranmıyordu.
+test("XLSX: bildirilen aralık dışındaki hücre de taranır ve maskelenir", async () => {
+  const secret = "kerem@ornek.com.tr";
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>');
+  zip.file("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
+  zip.file("xl/workbook.xml", '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="S1" sheetId="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></sheets></workbook>');
+  zip.file("xl/_rels/workbook.xml.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
+  zip.file("xl/worksheets/sheet1.xml", '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:A1"/><sheetData>'
+    + '<row r="1"><c r="A1" t="inlineStr"><is><t>Baslik</t></is></c></row>'
+    + `<row r="5"><c r="B5" t="inlineStr"><is><t>${secret}</t></is></c></row>`
+    + "</sheetData></worksheet>");
+
+  const { context, findings } = await scanOffice((await zip.generateAsync({ type: "uint8array" })).buffer, "t.xlsx");
+  assert.ok(findings.some((finding) => finding.value === secret), "aralık dışı hücre taranmadı");
+  const result = await redactOffice(context, findings, findings.map((finding) => finding.id));
+  const sheet = await (await JSZip.loadAsync(result.bytes)).file("xl/worksheets/sheet1.xml").async("string");
+  assert.ok(!sheet.includes(secret), "aralık dışı hücre çıktıda kaldı");
+  assert.match(sheet, /EMAIL_1/u, "yer tutucu yazılmadı");
+});

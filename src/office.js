@@ -56,19 +56,53 @@ function cellSlots(cell) {
   return slots;
 }
 
+// Sayfanın bildirdiği aralık (<dimension>) gerçeği yansıtmayabilir: "A1:A1"
+// derken B5'te veri durabilir. Bu hücreler Excel'de görünür ama aralık
+// gezilerek okunduğunda hiç taranmıyordu. Aralık gerçekte var olan hücrelere
+// göre onarılır; onarılmazsa hücre ya sessizce sızar ya da yazma aşamasında
+// paket eşleşmesi kopar.
+function repairSheetRanges(workbook) {
+  for (const sheetName of workbook.SheetNames || []) {
+    const sheet = workbook.Sheets?.[sheetName];
+    if (!sheet) continue;
+    let start = null;
+    let end = null;
+    for (const address of Object.keys(sheet)) {
+      if (address.startsWith("!")) continue;
+      let cell;
+      try {
+        cell = XLSX.utils.decode_cell(address);
+      } catch {
+        continue;
+      }
+      if (!start) {
+        start = { r: cell.r, c: cell.c };
+        end = { r: cell.r, c: cell.c };
+        continue;
+      }
+      start.r = Math.min(start.r, cell.r);
+      start.c = Math.min(start.c, cell.c);
+      end.r = Math.max(end.r, cell.r);
+      end.c = Math.max(end.c, cell.c);
+    }
+    if (start) sheet["!ref"] = XLSX.utils.encode_range({ s: start, e: end });
+  }
+}
+
 function workbookCells(workbook) {
   const cells = [];
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
-    if (!sheet || !sheet["!ref"]) continue;
-    const range = XLSX.utils.decode_range(sheet["!ref"]);
-    for (let row = range.s.r; row <= range.e.r; row += 1) {
-      for (let column = range.s.c; column <= range.e.c; column += 1) {
-        const address = XLSX.utils.encode_cell({ r: row, c: column });
-        const cell = sheet[address];
-        for (const slot of cellSlots(cell)) {
-          cells.push({ cell, ...slot, address, sheetName });
-        }
+    if (!sheet) continue;
+    // Sayfanın bildirdiği aralık (<dimension>) eksik olabilir; dışında kalan
+    // hücreler Excel'de görünür ama hiç taranmıyordu. Aralığı gezmek yerine
+    // sayfanın kendi hücre anahtarları gezilir, böylece bildirim yanlış ya da
+    // eksik olsa da hiçbir hücre atlanmaz.
+    for (const address of Object.keys(sheet)) {
+      if (address.startsWith("!")) continue;
+      const cell = sheet[address];
+      for (const slot of cellSlots(cell)) {
+        cells.push({ cell, ...slot, address, sheetName });
       }
     }
   }
@@ -127,6 +161,7 @@ export async function scanXlsx(arrayBuffer, filename, options = {}) {
     cellDates: true,
     bookVBA: true,
   });
+  repairSheetRanges(workbook);
   const originalZip = await JSZip.loadAsync(arrayBuffer, { checkCRC32: true });
   if (!originalZip.file("xl/workbook.xml")) throw new Error("Bu dosya geçerli bir XLSX çalışma kitabı değil.");
 

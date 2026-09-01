@@ -234,9 +234,15 @@ const WORD_TEXT_ELEMENTS = ["t", "delText", "instrText"];
 // Yorum, revizyon ve kişi kayıtlarında ad ve e-posta metin değil özniteliktir.
 const AUTHOR_ATTRIBUTES = ["author", "initials", "userId", "displayName", "providerId"];
 
+// Metin her zaman düğüm içinde durmaz. Alan kodu (w:fldSimple/@w:instr),
+// görselin alternatif metni (wp:docPr/@descr), köprü ipucu (@w:tooltip) ve
+// çizim adı kullanıcının yazdığı metni öznitelikte taşır; taranmadıkları için
+// çıktıda aynen kalıyorlardı.
+const TEXT_BEARING_ATTRIBUTES = ["instr", "descr", "tooltip", "title", "name"];
+
 const DOCUMENT_PROPERTY_ELEMENTS = [
   "creator", "lastModifiedBy", "title", "subject", "description", "keywords", "category",
-  "Company", "Manager", "Application", "HyperlinkBase",
+  "Company", "Manager", "Application", "HyperlinkBase", "contentStatus",
 ];
 
 const HANDLERS = [
@@ -245,7 +251,7 @@ const HANDLERS = [
     match: /^word\/(document2?|header\d*|footer\d*|footnotes|endnotes|comments|glossary\/document)\.xml$/u,
     slots: (xmlDocument, location) => [
       ...groupedTextSlots(xmlDocument, { groupNames: ["p"], textNames: WORD_TEXT_ELEMENTS }, location),
-      ...attributeSlots(xmlDocument, AUTHOR_ATTRIBUTES, location),
+      ...attributeSlots(xmlDocument, [...AUTHOR_ATTRIBUTES, ...TEXT_BEARING_ATTRIBUTES], location),
     ],
   },
   {
@@ -299,10 +305,62 @@ const HANDLERS = [
     ],
   },
   {
+    // İçerik denetimi veri deposu. Gövdedeki alan bir yer tutucuya çevrilse
+    // bile Word dosyayı açtığında değeri BURADAN geri dolduruyor; bu parça
+    // taranmadığı sürece maskeleme kalıcı değildir.
+    match: /^customXml\/(item\d*|itemProps\d*)\.xml$/u,
+    slots: (xmlDocument, location) => [
+      ...elementTextSlots(xmlDocument, ALL_TEXT_ELEMENTS(xmlDocument), location),
+      ...attributeSlots(xmlDocument, TEXT_BEARING_ATTRIBUTES, location),
+    ],
+  },
+  {
+    // Pivot önbelleği kaynak hücrelerin değerlerini kopyalar; sayfa maskelense
+    // bile pivot tablo orijinali göstermeye devam ediyordu.
+    match: /^xl\/pivotCache\/.+\.xml$/u,
+    slots: (xmlDocument, location) => [
+      ...elementTextSlots(xmlDocument, ["s"], location),
+      ...attributeSlots(xmlDocument, ["v", "name", "caption"], location),
+    ],
+  },
+  {
+    // Tablo ve sütun adları, otomatik filtre değerleri.
+    match: /^xl\/tables\/.+\.xml$/u,
+    slots: (xmlDocument, location) => attributeSlots(xmlDocument, ["name", "displayName", "val", "totalsRowLabel"], location),
+  },
+  {
+    // Sayfanın kendi XML'i: veri doğrulama listesi, otomatik filtre değeri,
+    // köprü metni ve ipucu. Hücre değerleri workbook üzerinden ayrıca işlenir.
+    match: /^xl\/worksheets\/sheet\d*\.xml$/u,
+    slots: (xmlDocument, location) => [
+      ...elementTextSlots(xmlDocument, ["formula1", "formula2"], location),
+      ...attributeSlots(xmlDocument, ["val", "display", "tooltip", "prompt", "promptTitle", "error", "errorTitle"], location),
+    ],
+  },
+  {
+    match: /^xl\/connections\.xml$/u,
+    slots: (xmlDocument, location) => attributeSlots(xmlDocument, ["name", "description", "connection", "command"], location),
+  },
+  {
     match: /_rels\/[^/]+\.rels$/u,
     slots: (xmlDocument, location) => externalRelationshipSlots(xmlDocument, location),
   },
 ];
+
+// customXml şeması serbesttir; metin taşıyan eleman adları önceden bilinemez.
+function ALL_TEXT_ELEMENTS(xmlDocument) {
+  const names = new Set();
+  const visit = (node) => {
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType !== 1) continue;
+      const hasText = Array.from(child.childNodes || []).some((leaf) => leaf.nodeType === 3 && (leaf.nodeValue || "").trim());
+      if (hasText) names.add(localNameOf(child));
+      visit(child);
+    }
+  };
+  visit(xmlDocument);
+  return [...names];
+}
 
 export function handlerFor(path) {
   return HANDLERS.find((handler) => handler.match.test(path)) || null;
