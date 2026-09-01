@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { detectNamedEntities, groupNerTokens } from "../src/ner.js";
+import { detectNamedEntities, groupNerTokens, nerCoverage, resolveEntityOverlaps } from "../src/ner.js";
 import { createReplacementMap, replaceText } from "../src/pii.js";
 
 test("WordPiece parçalarını bağlamsal PERSON ve ORG varlıklarına birleştirir", () => {
@@ -115,4 +115,169 @@ test("NER bulgularını aynı bağlamsal değerlerle maskeler", () => {
     replaceText("Özlem Türeci, Koç Holding'de çalışıyor.", map),
     "[KISI_1], [KURUM_1]'de çalışıyor."
   );
+});
+
+// Model bir sözcüğün yalnız bir parçasını etiketleyebiliyor: "Agent" WordPiece
+// olarak bölününce varlık "Ag" olarak bitiyor, maskelemeden sonra "ent"
+// belgede kalıyordu.
+test("varlık sözcüğün ortasında bitmez, sınıra taşınır", () => {
+  const text = "SQL Server Agent servisini kontrol et";
+  const entities = groupNerTokens(text, [
+    { entity: "B-ORG", score: 0.95, word: "SQL" },
+    { entity: "I-ORG", score: 0.94, word: "Server" },
+    { entity: "I-ORG", score: 0.93, word: "Ag" },
+  ]);
+  assert.equal(entities.length, 0, "teknik terim zaten elenmeli");
+
+  const names = groupNerTokens("Ahmetler geldi.", [{ entity: "B-PER", score: 0.97, word: "Ahmet" }]);
+  assert.deepEqual(names.map((entity) => entity.raw), ["Ahmetler"]);
+});
+
+// T-SQL dokümanında kolon adları, veri tipleri ve anahtar kelimeler kişi/kurum
+// olarak işaretleniyordu; maskelenirlerse betik çalışmaz hâle gelir.
+test("teknik terimler ve kod satırları kişi/kurum sayılmaz", () => {
+  const cases = [
+    ["RETURN", "RETURN"],
+    ["nvarchar", "nvarchar"],
+    ["Effort", "SELECT Effort FROM dbo.Tasks"],
+    ["STG", "INSERT INTO [STG].[Leaf] SELECT * FROM x"],
+  ];
+  for (const [word, line] of cases) {
+    const start = line.indexOf(word);
+    const tokens = [];
+    if (start > 0) tokens.push({ entity: "O", score: 1, word: line.slice(0, start).trim().split(/\s+/u)[0] });
+    tokens.push({ entity: "B-ORG", score: 0.96, word });
+    assert.deepEqual(
+      groupNerTokens(line, tokens).map((entity) => entity.raw),
+      [],
+      `elenmedi: ${word}`
+    );
+  }
+});
+
+test("gerçek adlar teknik elemeden geçer", () => {
+  assert.deepEqual(
+    groupNerTokens("Sayın Mehmet Demir, toplantı yarın.", [
+      { entity: "O", score: 1, word: "Sayın" },
+      { entity: "B-PER", score: 0.97, word: "Mehmet" },
+      { entity: "I-PER", score: 0.96, word: "Demir" },
+    ]).map((entity) => entity.raw),
+    ["Mehmet Demir"]
+  );
+});
+
+// Parçalar üst üste biner; sınıra denk gelen varlık bir parçada kesik,
+// diğerinde bütün çıkıyordu. Kesik olan listede ayrı bir öge olarak görünüp
+// maskelemeden sonra sözcüğün kalanını belgede bırakıyordu.
+test("çakışan varlıklarda uzun olan kazanır", () => {
+  const resolved = resolveEntityOverlaps([
+    { textIndex: 0, start: 10, end: 13, score: 0.9, category: "organization", raw: "SISPR" },
+    { textIndex: 0, start: 10, end: 14, score: 0.88, category: "organization", raw: "SISPRO" },
+    { textIndex: 0, start: 40, end: 46, score: 0.91, category: "person", raw: "Ahmet" },
+    { textIndex: 1, start: 0, end: 4, score: 0.95, category: "organization", raw: "LEAF" },
+  ]);
+  assert.deepEqual(resolved.map((entity) => entity.raw), ["SISPRO", "Ahmet", "LEAF"]);
+});
+
+// Model 512 token ile sınırlıdır ve fazlasını sessizce kırpar: parçanın
+// kuyruğu hiç taranmamış olur.
+test("kapsam ölçümü modelin gerçekten okuduğu son karakteri verir", () => {
+  const text = "Ahmet Yılmaz geldi ve gitti";
+  const full = nerCoverage(text, [
+    { entity: "B-PER", score: 0.9, word: "Ahmet" },
+    { entity: "I-PER", score: 0.9, word: "Yılmaz" },
+    { entity: "O", score: 1, word: "geldi" },
+    { entity: "O", score: 1, word: "ve" },
+    { entity: "O", score: 1, word: "gitti" },
+  ]);
+  assert.equal(full, text.length);
+
+  const truncated = nerCoverage(text, [
+    { entity: "B-PER", score: 0.9, word: "Ahmet" },
+    { entity: "I-PER", score: 0.9, word: "Yılmaz" },
+  ]);
+  assert.ok(truncated < text.length, "kırpılma fark edilmedi");
+  assert.equal(text.slice(truncated).trim(), "geldi ve gitti");
+});
+
+// Tabloda aynı değer onlarca hücrede geçer. Model aynı girdiye hep aynı çıktıyı
+// verdiği için çıkarıma yalnız benzersiz metin girmeli.
+test("yinelenen metin modele bir kez gider", async () => {
+  const cell = "Özlem Türeci Ankara'da Koç Holding'i ziyaret etti.";
+  let chunks = 0;
+  await detectNamedEntities(Array.from({ length: 20 }, () => cell), {
+    onProgress(progress) {
+      if (progress.phase === "inference") chunks = progress.total;
+    },
+  });
+  assert.equal(chunks, 1, "20 aynı hücre için tek parça çıkarıma girmeli");
+});
+
+// Bulgu benzersiz metinde bulunur ama maskeleme birim birim yapılır: bulgunun
+// o metnin geçtiği HER birimi göstermesi gerekir, yoksa kopyalar maskelenmez.
+// Boş birimler de indeksi kaydırmamalı — eskiden süzülüp indeks kaymasına ve
+// adın yanlış birimde aranmasına yol açıyorlardı.
+test("bulgu, metnin geçtiği bütün birimlere yazılır ve boş birim indeksi kaydırmaz", async () => {
+  const cell = "Özlem Türeci, Koç Holding'de çalışıyor.";
+  const units = ["", cell, "12.450,00", cell, "   ", cell];
+  const findings = await detectNamedEntities(units);
+
+  const person = findings.find((finding) => finding.category === "person");
+  assert.ok(person, "kişi bulunamadı");
+  assert.deepEqual(
+    person.locations.map((location) => location.unitIndex).sort((left, right) => left - right),
+    [1, 3, 5],
+    "bulgu yanlış birimlere yazıldı"
+  );
+  assert.equal(person.count, 3, "yineleme sayısı kayboldu");
+});
+
+// Kod satırının tamamını elemek, veri taşıyan satırlardaki GERÇEK adları da
+// düşürüyordu. Bir SQL yorumundaki ya da INSERT değerindeki ad maskelenmeden
+// kalıyorsa bu, teknik gürültüyü elemek için ödenecek bedelden çok daha ağır
+// bir arızadır — doğrudan sızıntıdır.
+test("kod satırındaki yorum ve tırnak içi ad elenmez", () => {
+  const kalmali = [
+    ["-- Ahmet Yılmaz tarafından güncellendi", "Ahmet Yılmaz"],
+    ["/* Hazırlayan: Mehmet Demir */", "Mehmet Demir"],
+    ["-- TODO: Ayşe ile teyit et", "Ayşe"],
+    ["SET @musteri = 'Ahmet Yılmaz'", "Ahmet Yılmaz"],
+    ["INSERT INTO Musteri VALUES ('Ahmet Yılmaz', 1)", "Ahmet Yılmaz"],
+  ];
+  for (const [satir, ad] of kalmali) {
+    assert.deepEqual(entitiesIn(satir, ad), [ad], `elendi: ${satir}`);
+  }
+
+  // Kod bağlamındaki çıplak tanımlayıcılar elenmeye devam eder.
+  for (const [satir, ad] of [
+    ["SELECT Effort, nvarchar FROM dbo.Tasks WHERE x = 1", "Effort"],
+    ["INSERT INTO [STG].[Leaf] SELECT * FROM x", "STG"],
+  ]) {
+    assert.deepEqual(entitiesIn(satir, ad), [], `elenmedi: ${ad}`);
+  }
+});
+
+function entitiesIn(line, value) {
+  const start = line.indexOf(value);
+  const words = value.split(" ");
+  const tokens = [];
+  if (start > 0) tokens.push({ entity: "O", score: 1, word: line.slice(0, start).trim().split(/\s+/u)[0] });
+  tokens.push({ entity: "B-PER", score: 0.97, word: words[0] });
+  for (const word of words.slice(1)) tokens.push({ entity: "I-PER", score: 0.96, word });
+  return groupNerTokens(line, tokens).map((entity) => entity.raw);
+}
+
+// hasPostalStructure yurt dışı posta kodu biçimini arıyordu ama `/i` bayrağı ve
+// boşluklu biçim yüzünden "tutar TL 15000" ya da "Fatura No 12345" geçen HER
+// satırı adres sayıp o satırdaki bütün kişi ve kurum adlarını eliyordu.
+test("tutar ve belge numarası içeren satır adres sayılmaz", () => {
+  for (const satir of [
+    "Tutar TL 15000 · Ahmet Yılmaz onayladı",
+    "Fatura No 12345 Ahmet Yılmaz",
+    "Ek 1234 sayılı yazı Ahmet Yılmaz imzalı",
+  ]) {
+    assert.deepEqual(entitiesIn(satir, "Ahmet Yılmaz"), ["Ahmet Yılmaz"], `elendi: ${satir}`);
+  }
+  // Gerçek posta kodu biçimi hâlâ adres bağlamı sayılır.
+  assert.deepEqual(entitiesIn("Dogus St TR-35390 BUCA Ahmet Yılmaz", "Ahmet Yılmaz"), []);
 });
