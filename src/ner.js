@@ -217,7 +217,11 @@ export function groupNerTokens(text, tokens, threshold = MIN_ENTITY_SCORE) {
     const trimmed = cleanEntitySpan(text, current.start, current.end);
     const span = expandToWordBoundaries(text, trimmed.start, trimmed.end);
     const value = text.slice(span.start, span.end);
-    const score = current.scores.reduce((sum, item) => sum + item, 0) / current.scores.length;
+    // Eşik token ORTALAMASINA uygulanıyordu: "Kerem Aydın" gibi iki parçalı bir
+    // adda tek bir zayıf token bütün kişiyi düşürüyor, aynı ad tek başına
+    // geçtiğinde bulunuyordu. Modelin herhangi bir parçadan emin olması varlığı
+    // ayakta tutmaya yeter; kaçırmak, fazladan bir bulgu göstermekten ağırdır.
+    const score = Math.max(...current.scores);
     const category = ENTITY_CATEGORIES[current.type];
     if (category
       && meaningfulCharacterCount(value) >= 2
@@ -255,8 +259,14 @@ export function groupNerTokens(text, tokens, threshold = MIN_ENTITY_SCORE) {
       continue;
     }
 
+    // Satır sonu varlığı BÖLER (kesmez). Alt alta yazılmış bir ad listesinde
+    // model parçaları birleştirdiğinde tek bir çok satırlı varlık oluşuyor;
+    // aralığı kesmek listenin kalanını tamamen düşürürdü, bölmek her adı
+    // ayrı bulgu olarak ayakta tutar.
     const startsAnother = current
-      && (current.type !== type || (bio === "B" && !aligned.continuation));
+      && (current.type !== type
+        || (bio === "B" && !aligned.continuation)
+        || text.slice(current.end, aligned.start).includes("\n"));
     if (startsAnother) flush();
     if (!current) current = { type, start: aligned.start, end: aligned.end, scores: [] };
     current.end = aligned.end;

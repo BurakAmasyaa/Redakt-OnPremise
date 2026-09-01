@@ -34,7 +34,9 @@ const TECHNICAL_TERMS = new Set([
   "dbo", "sys", "stg", "etl", "elt", "ods", "dwh", "edw", "src", "tgt", "tmp", "temp", "staging",
   "true", "false", "void", "string", "boolean", "object", "array", "class", "public", "private",
   "protected", "static", "import", "export", "const", "let", "var", "async", "await", "yield",
-  "new", "this", "self", "def", "elif", "lambda", "struct", "enum", "interface", "namespace",
+  // "elif" bilerek listede yok: Python anahtar kelimesi olsa da Türkiye'nin en
+  // yaygın kadın adlarından biri ve hiçbir bağlamda maskelenmemesi kabul edilemez.
+  "new", "this", "self", "def", "lambda", "struct", "enum", "interface", "namespace",
   "nan", "undefined", "todo", "fixme", "utf", "ascii", "guid", "uuid", "http", "https", "api",
   "url", "uri", "sql", "server", "agent", "job", "query", "batch", "log", "error", "warning",
   "debug", "info", "trace", "id", "pk", "fk",
@@ -45,7 +47,6 @@ const TECHNICAL_TERMS = new Set([
 const CODE_LINE_PATTERNS = [
   /\b(?:select|insert\s+into|update|delete\s+from|from|where|inner\s+join|left\s+join|declare|exec(?:ute)?|create\s+(?:table|view|proc|procedure|function|index)|alter\s+table|drop\s+table|group\s+by|order\s+by|union\s+all|begin\s+tran|set\s+@)\b/iu,
   /\[[\p{L}_][\p{L}\p{N}_]*\]\s*\.\s*\[/u,
-  /@[\p{L}_][\p{L}\p{N}_]*/u,
   /\b(?:n?varchar|n?char|decimal|numeric|datetime2?|bigint|smallint|tinyint|uniqueidentifier|var(?:binary))\s*\(/iu,
   // db.schema.table — her parça en az iki karakter olmalı, yoksa Türkçe
   // kısaltmalar ("ABC A.Ş.de") kod sanılır.
@@ -58,11 +59,14 @@ const CODE_LINE_PATTERNS = [
 
 // Değerin kendisi bir tanımlayıcı gibi görünüyor mu. Türkçe bir özel ad
 // böyle yazılmaz.
+// Biçim sezgileri dar tutulur. "Tümü küçük harf" ve "snake_case" kuralları
+// gerçek adları eliyordu: tamamı küçük harf yazılmış bir formdaki "ahmet" ve
+// dosya adından gelen "Kerem_Aydin" sessizce düşüyordu. Bu iki biçimin asıl
+// hedefi olan SQL tanımlayıcıları ("nvarchar", "sql_variant") zaten kesin
+// terim listesinde ve kod bağlamı ayağında yakalanıyor.
 const IDENTIFIER_SHAPES = [
-  /^[\p{Ll}][\p{Ll}\p{N}]*$/u,            // tümü küçük harf tek sözcük: "nvarchar"
-  /[\p{L}\p{N}]_[\p{L}\p{N}]/u,           // snake_case: "sql_variant"
   /[\p{L}]\p{N}|\p{N}[\p{L}]/u,           // harf ve rakam iç içe: "datetime2", "varchar50"
-  /[%$#@&*+=<>/\\|^~`]/u,                 // biçim/operatör karakteri: "%d"
+  /[%$#*+=<>/\\|^~`]/u,                  // biçim/operatör karakteri: "%d"
 ];
 
 function normalizeTerm(value) {
@@ -79,8 +83,14 @@ export function isTechnicalTerm(value) {
   return words.every((word) => TECHNICAL_TERMS.has(word));
 }
 
+// E-posta ve URL bir satırı kod yapmaz. "@ornek" parçası SQL parametresine,
+// "ornek.com.tr" ise db.schema.table biçimine benziyordu; sonuçta imza bloğu
+// ya da kaynakça satırındaki GERÇEK adlar sessizce eleniyordu. Kod denetimi
+// bunlar çıkarıldıktan sonra yapılır.
+const EMAIL_OR_URL = /(?:[a-z][a-z0-9+.\-]*:\/\/\S+|\bwww\.\S+|[\p{L}\p{N}._%+\-]+@[\p{L}\p{N}.\-]+)/giu;
+
 export function looksLikeCodeLine(line) {
-  const text = String(line || "");
+  const text = String(line || "").replace(EMAIL_OR_URL, " ");
   if (!text.trim()) return false;
   return CODE_LINE_PATTERNS.some((pattern) => pattern.test(text));
 }

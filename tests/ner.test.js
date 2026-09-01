@@ -281,3 +281,71 @@ test("tutar ve belge numarası içeren satır adres sayılmaz", () => {
   // Gerçek posta kodu biçimi hâlâ adres bağlamı sayılır.
   assert.deepEqual(entitiesIn("Dogus St TR-35390 BUCA Ahmet Yılmaz", "Ahmet Yılmaz"), []);
 });
+
+// Gürültü filtresinin en pahalı hatası gerçek bir adı elemektir. Aşağıdakilerin
+// hepsi gerçek belgelerde görülen biçimler; hiçbiri kod değildir.
+test("imza bloğu, kaynakça ve küçük harfli metinde ad elenmez", () => {
+  const korunmali = [
+    ["Talep sahibi Ayşe · iletisim@ornek.com.tr", "Ayşe"],
+    ["Kaynak https://ornek.com.tr — hazırlayan Ayşe", "Ayşe"],
+    ["Onay: @ayse tarafından verildi, Ayşe imzaladı", "Ayşe"],
+    ["talep sahibi ahmet demir", "ahmet demir"],
+  ];
+  for (const [line, value] of korunmali) {
+    assert.deepEqual(entitiesIn(line, value), [value], `elendi: ${line}`);
+  }
+
+  // Alt çizgiyle birleşmiş ad elenmiyor; aralık sözcüğün tamamına taşınıyor,
+  // yani maskeleme "Kerem_Aydin_dilekce" parçasının hiçbir yerini açıkta bırakmaz.
+  const birlesik = entitiesIn("Dosya Kerem_Aydin_dilekce olarak kaydedildi", "Kerem_Aydin");
+  assert.equal(birlesik.length, 1, "alt çizgili ad elendi");
+  assert.ok(birlesik[0].includes("Kerem_Aydin"), birlesik[0]);
+
+  // Kod bağlamındaki çıplak tanımlayıcılar elenmeye devam eder.
+  for (const [line, value] of [
+    ["SELECT Effort, nvarchar FROM dbo.Tasks WHERE x = 1", "Effort"],
+    ["INSERT INTO [STG].[Leaf] SELECT * FROM x", "STG"],
+    ["DECLARE @encryptedpwd nvarchar(50)", "encryptedpwd"],
+  ]) {
+    assert.deepEqual(entitiesIn(line, value), [], `elenmedi: ${value}`);
+  }
+});
+
+// "elif" Python anahtar kelimesi ama Türkiye'nin en yaygın kadın adlarından
+// biri; kesin terim listesinde durması onu hiçbir bağlamda maskeletmiyordu.
+test("yaygın Türkçe adlar teknik terim listesinde değildir", () => {
+  for (const name of ["Elif", "Can", "Ada", "Deniz", "Ege", "Bora", "Efe", "Doğa"]) {
+    assert.deepEqual(entitiesIn(`Sayın ${name} geldi.`, name), [name], `teknik sayıldı: ${name}`);
+  }
+});
+
+// Eşik token ORTALAMASINA uygulanıyordu: iki parçalı bir adda tek zayıf token
+// bütün kişiyi düşürüyor, aynı ad tek başına geçtiğinde bulunuyordu.
+test("tek zayıf token bütün adı düşürmez", () => {
+  const tokens = (scores) => [
+    { entity: "O", score: 1, word: "Sayın" },
+    { entity: "B-PER", score: scores[0], word: "Kerem" },
+    { entity: "I-PER", score: scores[1], word: "Aydın" },
+  ];
+  assert.deepEqual(
+    groupNerTokens("Sayın Kerem Aydın geldi", tokens([0.95, 0.70])).map((entity) => entity.raw),
+    ["Kerem Aydın"]
+  );
+  // Hiçbir parçası eşiği geçmeyen aday yine elenir.
+  assert.deepEqual(groupNerTokens("Sayın Kerem Aydın geldi", tokens([0.50, 0.60])), []);
+});
+
+// Alt alta yazılmış ad listesinde model parçaları birleştirdiğinde tek bir çok
+// satırlı varlık oluşuyor, o da listedeki bütün adları tek ögeye eritiyordu.
+test("varlık satır sonunu aşmaz", () => {
+  const entities = groupNerTokens("Katılımcılar\nKerem Aydın\nMerve Yıldız\nAhmet Can", [
+    { entity: "O", score: 1, word: "Katılımcılar" },
+    { entity: "B-PER", score: 0.97, word: "Kerem" }, { entity: "I-PER", score: 0.96, word: "Aydın" },
+    { entity: "I-PER", score: 0.95, word: "Merve" }, { entity: "I-PER", score: 0.94, word: "Yıldız" },
+    { entity: "I-PER", score: 0.93, word: "Ahmet" }, { entity: "I-PER", score: 0.92, word: "Can" },
+  ]);
+  assert.ok(entities.length >= 2, "liste tek varlığa eridi");
+  for (const entity of entities) {
+    assert.ok(!entity.raw.includes("\n"), `varlık satır sonunu aştı: ${JSON.stringify(entity.raw)}`);
+  }
+});
