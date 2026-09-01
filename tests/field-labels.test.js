@@ -219,3 +219,54 @@ test("form tablosunda üstte başlık olsa da etiket-değer eşleşir", () => {
     ["KEREM", "AYDIN"]
   );
 });
+
+// Listede olmayan bir etiket satırda değerin ardından geldiğinde değer ona
+// kadar uzuyordu: "KEREM Uyruğu : T.C" tek bir kişi adı sayılıyor, asıl ad
+// başka yerlerde bu varyantla eşleşmediği için maskesiz kalıyordu.
+test("değer, listede olmayan bir sonraki etikete taşmaz", () => {
+  for (const [line, expected] of [
+    ["Adı : KEREM Uyruğu : T.C.", "KEREM"],
+    ["Adı : KEREM  Medeni Hâli : Bekâr", "KEREM"],
+    ["Soyadı : AYDIN Cinsiyet : E", "AYDIN"],
+  ]) {
+    assert.deepEqual(detectLabelledFields([line]).map((finding) => finding.value), [expected], line);
+  }
+  // Adreste kesme yapılmaz: gerçek adresler iki nokta taşır.
+  assert.deepEqual(
+    detectLabelledFields(["Adres : ÖRNEK MAH 413 SK. NO: 10"]).map((finding) => finding.value),
+    ["ÖRNEK MAH 413 SK. NO: 10"]
+  );
+});
+
+// Başlığın kapsamı tablo bitince biter. Sıfırlanmadığında aynı sütundaki
+// toplam satırı ve dipnot da kişi adı sayılıp maskeleniyordu.
+test("Excel sütun başlığının kapsamı tablo bitince biter", () => {
+  const cell = (address, text) => ({ text, location: { kind: "xlsx", sheetName: "S1", address } });
+  assert.deepEqual(
+    detectLabelledFields([
+      cell("A1", "Adı"), cell("A2", "Kerem"), cell("A3", "Merve"),
+      cell("A4", ""), cell("A5", "TOPLAM"), cell("A6", "Not: rapor 2024 yılına aittir"),
+    ]).map((finding) => finding.value),
+    ["Kerem", "Merve"]
+  );
+});
+
+// Altında veri bulunan hücre bir SÜTUN BAŞLIĞIDIR, satır etiketi değil:
+// "Adı | Tutar" başlığının ikinci hücresi kişi adı sanılıp maskeleniyordu.
+test("başlık satırının yanındaki başlık değer sayılmaz", () => {
+  const word = (row, column, text) =>
+    ({ text, location: { kind: "docx", part: "d", cell: { table: 0, row, column } } });
+  assert.deepEqual(
+    detectLabelledFields([word(0, 0, "Adı"), word(0, 1, "Tutar"), word(1, 0, "Kerem"), word(1, 1, "1250")])
+      .map((finding) => finding.value),
+    ["Kerem"]
+  );
+  // Form tablosunda "Adı"nın altında yine etiket durur; orada komşu eşleşmesi sürer.
+  assert.deepEqual(
+    detectLabelledFields([
+      word(0, 0, "Adı"), word(0, 1, "KEREM"),
+      word(1, 0, "Soyadı"), word(1, 1, "AYDIN"),
+    ]).map((finding) => finding.value),
+    ["KEREM", "AYDIN"]
+  );
+});

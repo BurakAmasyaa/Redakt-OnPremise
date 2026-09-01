@@ -127,6 +127,22 @@ function isAcceptableValue(category, value) {
   return (trimmed.match(/[\p{L}\p{N}]/gu) || []).length >= 3;
 }
 
+// Listede olmayan bir etiket ("Uyruğu :", "Medeni Hâli :") satırda değerin
+// ardından geldiğinde değer ona kadar uzuyordu: "KEREM Uyruğu : T.C" tek bir
+// kişi adı sayılıyor, hem belge bozuluyor hem de asıl ad ("KEREM") başka
+// yerlerde bu varyantla eşleşmediği için maskesiz kalıyordu.
+//
+// Adres için kesme yapılmaz: gerçek adresler iki nokta taşır ("413 SK. NO: 10").
+// Etiket çok kelimeli olabilir ("Medeni Hâli :"); en soldaki eşleşme alınır.
+// Değer önce kırpılır, böylece baştaki boşluk ilk sözcüğü etikete katmaz.
+const TRAILING_LABEL = /\s+(?:[^\s:：]{1,30}\s+){0,2}[^\s:：]{1,30}\s*[:：]/u;
+
+function cutAtTrailingLabel(category, value) {
+  if (category === "location") return value;
+  const match = TRAILING_LABEL.exec(value);
+  return match ? value.slice(0, match.index) : value;
+}
+
 function trimValue(value) {
   return String(value).replace(/^[\s:：.\-–—|]+/u, "").replace(/[\s.,;|]+$/u, "");
 }
@@ -149,7 +165,7 @@ function collectFromLine(line, collect) {
     if (category === "location" && NON_LOCATION_QUALIFIERS.has(qualifierBefore(index.folded, match.index))) continue;
     const valueStart = toSource(match.index + match[0].length);
     const valueEnd = order + 1 < matches.length ? toSource(matches[order + 1].index) : line.length;
-    const raw = trimValue(line.slice(valueStart, valueEnd));
+    const raw = cutAtTrailingLabel(category, trimValue(line.slice(valueStart, valueEnd)));
     if (isAcceptableValue(category, raw)) collect(category, raw);
   }
 }
@@ -177,10 +193,19 @@ function dataCellIndexes(texts, locations) {
     widthByGrid.set(cell.grid, Math.max(widthByGrid.get(cell.grid) ?? 0, column + 1));
   }
 
+  // Altında veri bulunan hücre bir SÜTUN BAŞLIĞIDIR, satır etiketi değil.
+  // Ayrım şu: form tablosunda "Adı"nın altında yine bir etiket ("Soyadı")
+  // durur; başlık satırında ise veri ("Kerem") durur. Bu ayrım yapılmadığında
+  // "Adı | Tutar" başlığının ikinci hücresi kişi adı sanılıp maskeleniyordu.
+  const byCell = new Map(cells.map(({ index, cell }) => [`${cell.grid}\u0000${cell.column}\u0000${cell.row}`, index]));
   const dataCells = new Set();
   for (const { index, cell } of cells) {
-    if ((widthByGrid.get(cell.grid) ?? 0) <= NARROW_TABLE_COLUMNS) continue;
-    dataCells.add(index);
+    if ((widthByGrid.get(cell.grid) ?? 0) > NARROW_TABLE_COLUMNS) {
+      dataCells.add(index);
+      continue;
+    }
+    const below = byCell.get(`${cell.grid}\u0000${cell.column}\u0000${cell.row + 1}`);
+    if (below !== undefined && !isLabelOnly(trimValue(texts[below]))) dataCells.add(index);
   }
   return dataCells;
 }
@@ -251,10 +276,16 @@ function collectFromColumnHeaders(texts, locations, collectAt) {
   for (const cells of byColumn.values()) {
     cells.sort((left, right) => left.row - right.row);
     let category = null;
+    let previousRow = null;
     for (const cell of cells) {
       const text = trimValue(texts[cell.index]);
+      // Başlığın kapsamı tablo bitince biter. Boş hücre ya da satır atlaması
+      // tablonun sonudur; sıfırlanmadığında aynı sütundaki ikinci tablo,
+      // toplam satırı ve dipnot da kişi adı/adres sayılıp maskeleniyordu.
+      if (!text || (previousRow !== null && cell.row - previousRow > 1)) category = null;
+      previousRow = cell.row;
+      if (!text) continue;
       if (isLabelOnly(text)) {
-        // Yeni başlık: sütunun geri kalanı artık bu alandır.
         category = CATEGORY_BY_LABEL.get(foldLabel(text.replace(/[:：]\s*$/u, ""))) || null;
         continue;
       }
