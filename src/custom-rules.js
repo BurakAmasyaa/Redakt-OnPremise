@@ -1,6 +1,11 @@
+import { findFoldedOccurrences, foldForMatching } from "./text-match.js";
+
 function validateRule(rule, index) {
-  const find = String(rule.find || "");
-  const replacement = String(rule.replacement || "");
+  // Kural metni kırpılır: Excel'den yapıştırmada kalan sondaki boşluk,
+  // eşleşmenin sağ sınırını kaydırıp kuralı yanlış yere uyguluyordu.
+  // Kurumsal kurallar (rule-source.js) zaten kırpılıyordu.
+  const find = String(rule.find || "").trim();
+  const replacement = String(rule.replacement || "").trim();
   if (!find && !replacement) return null;
   if (!find || !replacement) {
     throw new Error(`${index + 1}. özel kuralda hem “Bul” hem “Şununla değiştir” alanını doldurun.`);
@@ -12,24 +17,18 @@ function validateRule(rule, index) {
 export function normalizeCustomRules(rules) {
   const normalized = rules.map(validateRule).filter(Boolean);
   const unique = new Map();
-  for (const rule of normalized) unique.set(rule.find, rule);
+  // Eşleşme harf duyarsız olduğu için "Kerem" ve "KEREM" aynı kuraldır;
+  // ikisi de listede kalırsa aynı yer iki kez aday olur.
+  for (const rule of normalized) unique.set(foldForMatching(rule.find), rule);
   return [...unique.values()];
 }
 
+// Kurumsal kurallar ile kendi kuralların aynı normalizasyonu kullanır.
+// Ayrıştıklarında aynı kural metni, kurumsal listeden geldiğinde belgedeki
+// diyakritiksiz yazımı buluyor, kullanıcının kural kutusundan geldiğinde
+// hiç bulamıyordu; kullanıcı kuralını yazdığı için maskelendiğini sanıyordu.
 export function normalizeTurkishForComparison(value) {
-  return String(value)
-    .normalize("NFC")
-    .toLocaleLowerCase("tr-TR")
-    .replace(/[ışğüöç]/gu, (character) => ({
-      ı: "i",
-      ş: "s",
-      ğ: "g",
-      ü: "u",
-      ö: "o",
-      ç: "c",
-    })[character])
-    .replace(/\s+/gu, " ")
-    .trim();
+  return foldForMatching(value).replace(/\s+/gu, " ").trim();
 }
 
 export function levenshteinDistance(left, right, limit = Number.POSITIVE_INFINITY) {
@@ -246,20 +245,28 @@ export async function detectImportedRulesBatched(units, rules, options = {}) {
   return [...findingsById.values()];
 }
 
+// Kendi kuralların büyük/küçük harfe takılmaz.
+//
+// Kullanıcı kuralını "Kerem" diye yazar; belge o adı "KEREM" biçiminde
+// taşıyabilir — resmî evrakta neredeyse her zaman öyle taşır. Eşleşme birebir
+// yapıldığında kural sessizce hiçbir şey yakalamıyor, kullanıcı da kuralını
+// yazdığı için maskelendiğini sanıyordu. Kurumsal kurallar zaten harf duyarsız
+// karşılaştırılıyordu; kendi kuralların da aynı davranışa alındı.
+//
+// Sınır denetimi eklendi: harf duyarsız aramada sınırsız alt dize eşleşmesi
+// tehlikelidir ("Ali" kuralı "kalite"nin içini yakalardı).
 export function detectCustomRules(units, rules) {
   const validRules = normalizeCustomRules(rules);
   return validRules.map((rule, ruleIndex) => {
     const locations = [];
+    const variants = new Set();
     for (let unitIndex = 0; unitIndex < units.length; unitIndex += 1) {
       const input = units[unitIndex];
       const text = typeof input === "string" ? input : String(input.text || "");
       const location = typeof input === "string" ? { kind: "text", unitIndex } : input.location;
-      let cursor = 0;
-      while (cursor <= text.length - rule.find.length) {
-        const start = text.indexOf(rule.find, cursor);
-        if (start < 0) break;
-        locations.push({ unitIndex, start, end: start + rule.find.length, location });
-        cursor = start + Math.max(rule.find.length, 1);
+      for (const hit of findFoldedOccurrences(text, rule.find, { wholeWord: true })) {
+        variants.add(hit.text);
+        locations.push({ unitIndex, start: hit.start, end: hit.end, location });
       }
     }
     return {
@@ -274,7 +281,8 @@ export function detectCustomRules(units, rules) {
       count: locations.length,
       confidence: "custom",
       placeholder: rule.replacement,
-      variants: [rule.find],
+      // Maskeleme belgedeki yazımı arar; bulunan her yazım varyant olarak taşınır.
+      variants: variants.size ? [...variants] : [rule.find],
       locations,
     };
   }).filter((finding) => finding.count > 0);
