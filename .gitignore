@@ -21,6 +21,7 @@ dist-guard
 # Guard eklentisi — public depoya asla çıkmaz (kaynak + imzalı paket + özel anahtar)
 guard/
 tests/guard.test.js
+tests/warmup.test.js
 dist-guard/
 dist-guard.crx
 dist-guard.pem
