@@ -156,6 +156,41 @@ function attributeSlots(xmlDocument, localNames, location) {
   return slots;
 }
 
+function siblingIndexAmong(node, name) {
+  let index = 0;
+  for (let sibling = node.parentNode?.firstChild; sibling; sibling = sibling.nextSibling) {
+    if (sibling.nodeType !== 1 || localNameOf(sibling) !== name) continue;
+    if (sibling === node) return index;
+    index += 1;
+  }
+  return index;
+}
+
+// Word tablosunda etiket satırın başında değil, sütunun tepesinde olabilir
+// ("Adres No" başlığının altındaki numara). Etiketle değeri eşleyebilmek için
+// paragrafın hangi tabloda, hangi satır ve sütunda olduğu gerekir; paragraf
+// listesi bunu kendiliğinden söylemez. Ata düğümlerden okunur ve yalnızca
+// gerçekten tablo içindeki paragraflara eklenir. İç içe tabloda en içteki
+// hücre bulunur, ki doğrusu odur.
+function tableCoordinates(node, tableIds) {
+  let cell = null;
+  let row = null;
+  for (let current = node; current && current.nodeType === 1; current = current.parentNode) {
+    const name = localNameOf(current);
+    if (!cell && name === "tc") cell = current;
+    else if (cell && !row && name === "tr") row = current;
+    else if (cell && row && name === "tbl") {
+      let table = tableIds.get(current);
+      if (table === undefined) {
+        table = tableIds.size;
+        tableIds.set(current, table);
+      }
+      return { table, row: siblingIndexAmong(row, "tr"), column: siblingIndexAmong(cell, "tc") };
+    }
+  }
+  return null;
+}
+
 // Paragraf biçimli parçalar: bir grup düğümü (paragraf, zengin metin, yorum
 // gövdesi) ve içindeki metin düğümleri. Word, DrawingML ve SpreadsheetML'in
 // üçü de bu şekle oturur.
@@ -163,11 +198,15 @@ function groupedTextSlots(xmlDocument, { groupNames, textNames }, location) {
   const groups = elementsByLocalName(xmlDocument, groupNames);
   const isText = (node) => textNames.includes(localNameOf(node));
   const isGroup = (node) => groupNames.includes(localNameOf(node));
+  const tableIds = new Map();
   const slots = [];
   for (const group of groups) {
     const nodes = collectOrdered(group, isText, isGroup);
     if (!nodes.length) continue;
-    slots.push(nodeGroupSlot(nodes, { ...location, index: slots.length }));
+    const cell = tableCoordinates(group, tableIds);
+    slots.push(nodeGroupSlot(nodes, cell
+      ? { ...location, index: slots.length, cell }
+      : { ...location, index: slots.length }));
   }
   return slots;
 }
