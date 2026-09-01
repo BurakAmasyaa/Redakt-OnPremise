@@ -30,8 +30,14 @@ Kullanıcının tarayıcısı                    Şirket sunucusu           Şir
 Sunucu iki iş yapar: **uygulamayı sunmak** ve **kural listesini okumak**.
 Belge içeriği ne sunucuya gider, ne SQL'e yazılır, ne log'a düşer.
 
+**Model nerede duruyor.** Dil modeli (~147 MB) ilk taramada sunucudan bir kez
+indirilir ve kullanıcının tarayıcı profilinin Cache Storage deposunda
+(`transformers-cache`) kalır. Cihazdan çıkmaz, sunucuya geri gitmez, başka bir
+tarayıcı profiline taşınmaz. Tarama ekranı bunu — kaynak adres, boyut ve indirilip
+indirilmediği — açıkça yazar ve **Cihazdan kaldır** düğmesiyle silmeyi sunar.
+
 Bu sınır kodda gevşetilmemesi gereken bir kuraldır ve testle korunur
-([tests/privacy.test.js](tests/privacy.test.js)): belgeyi işleyen 15 modülde ağ
+([tests/privacy.test.js](tests/privacy.test.js)): belgeyi işleyen 16 modülde ağ
 erişimi ve kalıcı depolama yasaktır, ağ erişimi yalnızca
 [src/rule-source.js](src/rule-source.js) içinde bulunabilir ve orada da tek
 yönlüdür — gövdesiz `GET`, yalnızca `/api/rules`.
@@ -45,12 +51,45 @@ yönlüdür — gövdesiz `GET`, yalnızca `/api/rules`.
 | Katman | Bulduğu | Nasıl |
 |---|---|---|
 | **Kesin** | E-posta, IBAN, T.C. Kimlik No, kredi kartı | Regex + doğrulama (IBAN mod-97, TCKN 10./11. hane, kart Luhn) |
+| **Alan etiketi** | Ad, soyad, baba adı, doğum yeri, adres, adres/cilt/dosya/sicil no | Belgenin kendi etiketi (`Adı :`, tablo hücresi, Excel sütun başlığı) |
 | **Muhtemel** | Kişi adı, kurum/şirket, adres-konum, telefon | Yerel Türkçe BERT NER modeli, güven puanıyla |
 | **Kurumsal** | Şirkete özel isimler, proje kodları, müşteri unvanları | SQL'deki kural tablosu |
+
+Alan etiketi katmanı modelden bağımsız ve deterministiktir. Resmî evrakta bilgi
+cümle içinde değil, etiketin karşısında ve büyük harfle durur (`Adı : KEREM`);
+dil modeli bu biçimi kötü okur. Etiketin ne olduğunu belgenin kendisi söylediği
+için bu alanlar model hiç çalışmasa da bulunur. Etiket dört biçimde aranır:
+
+| Biçim | Nerede | Nasıl bulunur |
+|---|---|---|
+| `Adı : KEREM` | Her belge türü | Aynı satırda, iki nokta zorunlu |
+| `Adı` \| `:` \| `KEREM` | Word tablosu | Komşu hücreler |
+| Sütun başlığı | Excel, Word tablosu | Hücre koordinatı (`C4`, tablo/satır/sütun) |
+| Sütun başlığı | PDF | Kaydın sayfa üzerindeki x konumu |
+
+Sütun başlığı yalnızca başlığın kendisi bir alan adıysa çalışır: `Adres No`
+sütunu maskelenir, `Tutar` sütununa dokunulmaz. Aşırı maskeleme de bir arızadır
+— tablodan sonra gelen düz metin satırı sütun değeri sayılmaz, "Web adresi" ya
+da "IP adresi" bir yer sayılmaz, sütununun başlığı alan adı olmayan hücre de
+komşusunun etiketi sayılmaz.
 
 Bulguların tamamı seçili gelir. NER bulguları ayrı bir **"Muhtemel"** grubunda
 model güven puanıyla listelenir — model yanılabildiği için kullanıcı bunları
 gözden geçirip seçimini kaldırabilir.
+
+Model teknik metni Türkçe düzyazı gibi okur: bir T-SQL dokümanında kolon adları,
+veri tipleri ve anahtar kelimeler düzenli olarak kişi/kurum diye işaretlenir
+(`nvarchar`, `RETURN`, `STG`). Bunlar iki ayrı zarar üretir — liste kirlenir ve
+maskelenirlerse belge işlevini kaybeder. [src/technical-noise.js](src/technical-noise.js)
+bunları eler: terimin kendisi (kesin liste) ve terimin bulunduğu satırın kod olup
+olmadığı (bağlam) birlikte değerlendirilir. Bağlam ayağı, listeye giremeyecek
+projeye özgü kısaltmaları da yakalar.
+
+Model bir sözcüğün yalnız bir parçasını etiketleyebilir (`Agent` → `Ag`); varlık
+aralığı daima sözcük sınırına taşınır, yoksa listede anlamsız bir öge görünür ve
+maskelemeden sonra sözcüğün kalanı belgede kalırdı. Eşleşme büyük/küçük harfe de
+takılmaz: modelin bir yerde yakaladığı `LEAF`, başka bir yerdeki `Leaf` ile aynı
+addır.
 
 Desteklenen dosyalar: `.docx`, `.xlsx`, `.pdf`, `.txt`, `.jpg`, `.png`.
 Taranmış PDF sayfaları ve Office içine gömülü görseller yerel OCR ile
@@ -77,12 +116,55 @@ Bunların hepsi bulgu listesinde de görünür — kullanıcı neyin maskelenece
 görmeden onaylamaz. Kapsamı [tests/output-leak.test.js](tests/output-leak.test.js)
 korur: çıktı paketi açılıp her nişan değeri **tüm** parçalarda aranır.
 
+**Dosya adı da bir tarama birimidir.** `Kerem Aydın ikametgah.pdf` belgesinin içi
+maskelenip adı olduğu gibi kalırsa, dosya paylaşıldığı anda maskeleme boşa
+çıkar. Ad; desenler, kendi kuralların, kurumsal kurallar ve modelle aynı
+şekilde taranır ve çıktı adı aynı yer tutucularla yazılır
+(`[KİŞİ_1] ikametgah_redakte.pdf`). Eşleştirme dosyasının adı da bundan
+türetilir.
+
 Sayfa adı maskelenirken Excel'in ad kurallarına uydurulur (yasak karakterler,
 31 karakter sınırı) ve ona yapılan formül başvuruları birlikte güncellenir.
 Önbellek değeri maskelenip formül el değmeden kalırsa Excel dosyayı açtığında
 orijinali geri hesaplar; bu durumda formül düşürülür.
 
-Üç tarama seviyesi var — Hızlı, Dengeli, Kapsamlı — hız ve kapsam arasında denge kurar.
+Üç tarama seviyesi var — Hızlı, Dengeli, Kapsamlı. Değiştirdikleri iki şey var:
+metnin kaç karakterlik parçalar hâlinde modele verildiği ve parçaların ne kadar
+**bindiği** (overlap), bir de taranmış sayfaların OCR çözünürlüğü (150 / 200 /
+300 DPI). Bindirme, parça sınırına denk gelen adın kaybını önler.
+
+Bulgu listesindeki kullanım sayısı, maskelemenin gerçekten yapacağı değişiklik
+sayısıdır: sayım, maskelemenin kendi çakışma çözümleme fonksiyonuyla yapılır ve
+**seçim her değiştiğinde yeniden hesaplanır**. Öncelikli bir kuralın seçimi
+kaldırıldığında onun kapsadığı bulgu yeniden devreye girer ve sayı bunu anında
+yansıtır. `0` gösteren bir bulgu, o değerin şu anki seçimde başka bir kuralın
+kapsamında olduğu anlamına gelir.
+
+### Eşleştirme neyi "aynı değer" sayar
+
+İki yazımın aynı değer olup olmadığına tek yerden karar verilir
+([src/text-match.js](src/text-match.js)). Eşleşme şunları gözetmez:
+
+| Gözetilmeyen | Neden |
+|---|---|
+| Büyük/küçük harf | Belge "KEREM" der, kural "Kerem" yazar |
+| Nokta ayrımı (I/İ/ı/i) | Excel `UPPER()` ve İngilizce klavye "Melis"i "MELIS" yapar |
+| Diyakritik (ş/ğ/ü/ö/ç/â) | Türkçe belgede diyakritiksiz yazım olağandır |
+| Ayrışık yazım (NFD) | Word ve bazı PDF'ler harfi taban + birleştirici işaret yazar |
+| Görünmez karakterler | Yumuşak tire, ZWJ/ZWNJ/ZWSP, bidi işaretleri |
+
+Bunların her biri, eşleşmeyi kopardığında aynı adı belgenin bir yarısında
+maskesiz bırakıyordu. Sözcük sınırı yine korunur: "Ali" kuralı "kalite"nin
+içini yakalamaz, ayrışık yazımda bile.
+
+Desenler de aynı gözle bakar: telefon ve kart numarasında kırılmaz boşluk
+(U+00A0) ve tipografik tire ayırıcı sayılır — Word/Excel kopyalamasının
+standart çıktısı budur ve ASCII sınıf bunları görmediği için gözle normal
+görünen numaralar taramaya hiç girmiyordu.
+
+Model ve alan etiketi bulguları belgenin **tamamında** aranır. Eskiden yalnızca
+bulundukları birime uygulanıyorlardı; XLSX her hücreyi ayrı birim saydığı için
+bir hücrede bulunan ad başka hücrede maskesiz kalabiliyordu.
 
 ---
 

@@ -8,12 +8,18 @@ import { aggregateQueueFindings } from "./queue-dashboard.js";
 import { acceptedDocumentExtensions, MAX_DOCUMENT_FILE_SIZE, validateDocumentBytes } from "./file-validation.js";
 import { createOperationCoordinator } from "./operation-coordinator.js";
 import { createSerialTaskRunner } from "./serial-task.js";
+import { canStartScan, itemsToRequeue, SCANNABLE_STATUS } from "./queue-state.js";
 import {
+  clearNerModelCache,
   formatModelDownloadBytes,
+  formatModelSize,
   isMeasurableModelDownload,
   isNerModelCached,
+  nerModelStorage,
   NER_MODEL_DOWNLOAD_MESSAGE,
 } from "./model-cache.js";
+import { detectLabelledFields } from "./field-labels.js";
+import { aggregateFindings, collectReplacementPlanBatched, countsForSelection, mergeFindings } from "./pii.js";
 import { DEFAULT_DOCUMENT_TITLE, scanDocumentTitle } from "./live-title.js";
 import { findingsForCategory, toggledCategory } from "./finding-filter.js";
 import { createBeforeUnloadGuard, hasActiveProcessing } from "./lifecycle.js";
@@ -27,6 +33,8 @@ const state = {
   context: null,
   filename: "",
   findings: [],
+  // Aday listesi: seçim her değiştiğinde sayım bundan yeniden çıkarılır.
+  replacementPlan: [],
   outputUrl: null,
   outputName: "",
   mappingUrl: null,
@@ -45,6 +53,9 @@ const state = {
   activeQueueItem: null,
   expandedQueueItemId: null,
   cancelledQueueItemId: null,
+  // Kullanıcı taramayı kendisi durdurdu mu: durduran kişi hata mesajı değil,
+  // yeniden başlatabildiği bir kuyruk görmeli.
+  cancelledScan: false,
   cancellingAll: false,
   batchMode: false,
   batchScanning: false,
@@ -72,6 +83,7 @@ const elements = Object.fromEntries(
     "custom-group", "custom-count", "custom-list",
     "scan-setup", "selected-file-bar", "selected-filename", "selected-filename-detail", "change-file",
     "scan-button", "scan-button-label", "device-recommendation", "large-file-warning",
+    "model-storage-badge", "model-storage-detail", "model-storage-clear",
     "queue-list", "queue-cancel-all", "review-controls",
     "processing-progress", "processing-units", "progress-bar", "processing-percent", "processing-eta", "processing-cancel",
     "batch-back", "batch-title", "batch-cancel-all", "batch-download-all", "batch-subtitle", "batch-instruction", "batch-summary-tab", "batch-files-tab",
@@ -203,7 +215,40 @@ function selectedFindings() {
   return state.findings.filter((finding) => state.selectedFindingIds.has(finding.id));
 }
 
+// Sayı "tarama sırasında kaç yer bulundu" değil, "bu seçimle kaç yer
+// değişecek" olmalı. Kullanıcı öncelikli bir kuralın seçimini kaldırdığında
+// onun kapsadığı bulgu yeniden devreye giriyor; sayı eskisi gibi sabit
+// kalırsa arayüz "0 kullanım maskelenecek" derken belgede iki değişiklik
+// oluyordu. Yeniden tarama gerekmez: aday listesi taramada saklandı.
+function refreshPlannedCounts() {
+  if (!state.replacementPlan.length) return;
+  const counts = countsForSelection(state.replacementPlan, [...state.selectedFindingIds]);
+  for (const finding of state.findings) finding.count = counts.get(finding.id) || 0;
+
+  for (const element of document.querySelectorAll(".finding-count[data-finding-id]")) {
+    const finding = state.findings.find((item) => item.id === element.dataset.findingId);
+    if (!finding) continue;
+    const covered = finding.count === 0;
+    element.textContent = covered ? "0" : finding.count > 1 ? `×${finding.count}` : "";
+    element.setAttribute("aria-label", covered
+      ? "Bu değer öncelikli başka bir kuralla maskeleniyor"
+      : `${finding.count} kullanım maskelenecek`);
+    element.closest(".finding-row")?.classList.toggle("is-covered", covered);
+  }
+
+  const byLabel = new Map();
+  for (const finding of state.findings) {
+    byLabel.set(finding.label, (byLabel.get(finding.label) || 0) + finding.count);
+  }
+  for (const chip of document.querySelectorAll(".category-chip[data-category-label]")) {
+    const label = chip.dataset.categoryLabel;
+    if (!label) continue;
+    chip.textContent = `${label} ${byLabel.get(label) || 0}`;
+  }
+}
+
 function updateSelection() {
+  refreshPlannedCounts();
   const selected = selectedFindings();
   const total = state.findings.length;
   const occurrences = selected.reduce((sum, finding) => sum + finding.count, 0);
@@ -468,10 +513,22 @@ function makeFindingRow(finding, { virtualized = false, index = 0, total = 0 } =
 
   const placeholder = document.createElement("code");
   placeholder.textContent = finding.placeholder;
+  row.dataset.findingId = finding.id;
   const count = document.createElement("span");
   count.className = "finding-count";
-  count.textContent = finding.count > 1 ? `×${finding.count}` : "";
-  count.setAttribute("aria-label", `${finding.count} kez bulundu`);
+  count.dataset.findingId = finding.id;
+  // Sayı artık "model kaç kez gördü" değil, "maskeleme kaç yeri değiştirecek".
+  // Sıfır, değerin başka bir kuralın kapsamında kaldığı anlamına gelir; boş
+  // bırakmak bunu "bir kez" ile aynı gösterirdi.
+  const covered = finding.count === 0;
+  count.textContent = covered ? "0" : finding.count > 1 ? `×${finding.count}` : "";
+  count.setAttribute("aria-label", covered
+    ? "Bu değer öncelikli başka bir kuralla maskeleniyor"
+    : `${finding.count} kullanım maskelenecek`);
+  if (covered) {
+    row.classList.add("is-covered");
+    row.title = "Bu değer öncelikli başka bir kuralla maskeleniyor.";
+  }
   row.append(input, checkbox, copy, placeholder, count);
   installPressFeedback(row);
   return row;
@@ -570,6 +627,7 @@ function renderReview({ inline = false, reviewState = null, preserveCategory = f
     const active = state.activeFindingCategory === category;
     chip.classList.toggle("is-active", active);
     chip.setAttribute("aria-pressed", String(active));
+    chip.dataset.categoryLabel = category === null ? "" : category;
     chip.textContent = count === null ? label : `${label} ${count}`;
     chip.addEventListener("click", () => {
       state.activeFindingCategory = category === null
@@ -676,12 +734,21 @@ async function handleFile(file, { backgroundQueue = false } = {}) {
     tracker.start("extracting", 1);
     tracker.advance(1);
     const customRules = normalizeCustomRules(state.customRules);
-    const customFindings = detectCustomRules(context.units || context.texts || [], customRules);
     const documentUnits = context.units || context.texts || [];
+    // Dosya adı da taranan bir birimdir. "Kerem Aydın ikametgah.pdf" belgesinin
+    // içi maskelenip adı olduğu gibi kalınca, dosya paylaşıldığı anda maskeleme
+    // boşa çıkıyordu. Ad, belgenin geri kalanıyla aynı kurallardan geçer.
+    const filenameStem = file.name.replace(/\.[^.]+$/u, "");
+    const filenameUnit = { text: filenameStem, location: { kind: "filename" } };
+    const scanUnits = [...documentUnits, filenameUnit];
+    const customFindings = detectCustomRules(scanUnits, customRules);
+    const fieldFindings = detectLabelledFields(documentUnits);
+    const filenameFindings = aggregateFindings([filenameUnit])
+      .map((finding, index) => ({ ...finding, id: `fn_${index + 1}` }));
     let importedFindings = [];
     if (state.importedRules.length) {
       let rulesStarted = false;
-      importedFindings = await detectImportedRulesBatched(documentUnits, state.importedRules, {
+      importedFindings = await detectImportedRulesBatched(scanUnits, state.importedRules, {
         batchSize: 100,
         signal: controller.signal,
         onProgress({ current, total }) {
@@ -705,7 +772,7 @@ async function handleFile(file, { backgroundQueue = false } = {}) {
       : NER_MODEL_DOWNLOAD_MESSAGE;
     tracker.start("model", 0, modelDetail);
     try {
-      namedEntities = await detectNamedEntitiesInWorker(context.texts || [], {
+      namedEntities = await detectNamedEntitiesInWorker([...(context.texts || []), filenameStem], {
         profile: state.profile,
         signal: controller.signal,
         onProgress(progress) {
@@ -748,11 +815,35 @@ async function handleFile(file, { backgroundQueue = false } = {}) {
         detail: `Bu belgede isimler maskelenmemiş olabilir; yalnızca e-posta, telefon, IBAN, T.C. kimlik ve kart numaraları ile kurumsal kurallar uygulandı.${error?.detail ? ` (Teknik ayrıntı: ${error.detail})` : ""}`,
       };
     }
-    const combinedFindings = [...customFindings, ...importedFindings, ...findings, ...namedEntities];
+    // Sıra güven sırasıdır: senin kuralın, kurumsal kural, doğrulanabilir desen,
+    // belgenin kendi alan etiketi, sonra dil modeli. Aynı değeri iki katman da
+    // bulduysa öndeki kazanır, arkadakinin yazım varyantları ona eklenir.
+    const combinedFindings = mergeFindings([
+      customFindings,
+      importedFindings,
+      findings,
+      filenameFindings,
+      fieldFindings,
+      namedEntities,
+    ]);
+    // "Kaç kullanım maskelenecek" sorusunu maskelemenin kendi kodu yanıtlar.
+    // Tespit sayısı ile uygulanan değişiklik sayısı birbirini tutmuyordu:
+    // rapor 17 derken belgede 18 yer tutucu, 2 derken 8 değişiklik çıkıyordu.
+    tracker.start("verifying", scanUnits.length, "Her bulgunun belgede kaç yerde geçtiği sayılıyor.");
+    const replacementPlan = await collectReplacementPlanBatched(scanUnits, combinedFindings, {
+      signal: controller.signal,
+      onProgress({ current }) {
+        tracker.advance(current, "Her bulgunun belgede kaç yerde geçtiği sayılıyor.");
+      },
+    });
+    const plannedCounts = countsForSelection(replacementPlan, combinedFindings.map((finding) => finding.id));
+    for (const finding of combinedFindings) finding.count = plannedCounts.get(finding.id) || 0;
+
     tracker.start("reviewPreparation", 1);
     tracker.advance(1);
     if (backgroundQueue && state.currentQueueItem) {
       state.currentQueueItem.findings = combinedFindings;
+      state.currentQueueItem.replacementPlan = replacementPlan;
       state.currentQueueItem.selectedFindingIds = combinedFindings.map((finding) => finding.id);
       const { disposeDocument } = await import("./pipeline.js");
       await disposeDocument(context);
@@ -762,6 +853,7 @@ async function handleFile(file, { backgroundQueue = false } = {}) {
       workingContext = null;
       state.filename = file.name;
       state.findings = combinedFindings;
+      state.replacementPlan = replacementPlan;
       state.selectedFindingIds = new Set(combinedFindings.map((finding) => finding.id));
       renderReview();
     }
@@ -891,12 +983,24 @@ async function processSelection() {
     elements.doneCopy.textContent = isPdf
       ? "Seçtiğin bilgiler maskelendi; hassas metin katmanı kaldırılıp sayfalar güvenli biçimde düzleştirildi."
       : "Seçtiğin bilgiler tutarlı etiketlerle maskelendi. Orijinal dosyana dokunulmadı.";
-    elements.downloadDetail.textContent = isPdf ? "Paylaşmaya hazır · metin katmanı kaldırıldı" : "Paylaşmaya hazır";
+    // Dosya adı da maskelendiyse bunu söylemek gerekir: kullanıcı aradığı adı
+    // bulamayınca yanlış dosyayı indirdiğini sanabilir.
+    // Karşılaştırma bağlamın kendi adıyla yapılır: çıktı adını üreten de odur.
+    const sourceName = state.context?.filename || state.filename;
+    const untouchedName = sourceName.replace(/(\.[^.]+)$/u, "_redakte$1");
+    const filenameRedacted = result.filename !== untouchedName;
+    elements.downloadDetail.textContent = [
+      isPdf ? "Paylaşmaya hazır · metin katmanı kaldırıldı" : "Paylaşmaya hazır",
+      filenameRedacted ? "dosya adındaki hassas bilgi de maskelendi" : "",
+    ].filter(Boolean).join(" · ");
 
     const shouldMap = elements.mappingToggle.checked;
     if (shouldMap) {
       state.mappingUrl = URL.createObjectURL(new Blob([mappingContents(selected)], { type: "application/json" }));
-      state.mappingName = state.filename.replace(/\.[^.]+$/u, "_eslestirme.json");
+      // Eşleştirme dosyasının adı da maskelenmiş addan türetilir; orijinal ad
+      // hassas olabiliyor ve bu dosya zaten ayrı saklanıyor.
+      const mappingStem = result.filename.replace(/\.[^.]+$/u, "").replace(/_redakte$/u, "");
+      state.mappingName = `${mappingStem}_eslestirme.json`;
     }
     elements.mappingDownload.hidden = !shouldMap;
     elements.mappingWarning.hidden = !shouldMap;
@@ -931,6 +1035,7 @@ async function resetApp() {
   state.activeFindingCategory = null;
   document.title = DEFAULT_DOCUMENT_TITLE;
   state.findings = [];
+  state.replacementPlan = [];
   state.outputName = "";
   state.mappingName = "";
   state.customRules = [];
@@ -944,6 +1049,7 @@ async function resetApp() {
   state.activeQueueItem = null;
   state.expandedQueueItemId = null;
   state.cancelledQueueItemId = null;
+  state.cancelledScan = false;
   state.cancellingAll = false;
   state.batchMode = false;
   state.batchScanning = false;
@@ -978,6 +1084,25 @@ async function resetApp() {
 
 function updateCustomRulesEmptyState() {
   elements.customRulesEmpty.hidden = state.customRules.length > 0;
+}
+
+// Model nerede duruyor sorusunun cevabı ekranda durur.
+//
+// Uygulama "yerel model" diyordu ama modelin cihazda nereye indiğini
+// söylemiyordu; kullanıcı ne doğrulayabiliyor ne de kaldırabiliyordu.
+// Doğrulanamayan bir mahremiyet iddiası, iddia olmaktan öteye gitmez.
+async function renderModelStorage() {
+  const storage = nerModelStorage();
+  const cached = await isNerModelCached().catch(() => false);
+  elements.modelStorageBadge.textContent = cached ? "Cihazda" : "İndirilmedi";
+  elements.modelStorageBadge.dataset.tone = cached ? "ok" : "loading";
+  elements.modelStorageDetail.textContent = [
+    `${formatModelSize(storage.totalBytes)} · bu tarayıcı profilinin önbelleğinde (Cache Storage → “${storage.cacheName}”)`,
+    cached
+      ? `Kaynak: ${storage.sourceUrl} · bir kez indirildi, cihazdan çıkmıyor.`
+      : `İlk taramada ${storage.sourceUrl} adresinden bir kez indirilecek; sonrasında cihazda kalır.`,
+  ].join("\n");
+  elements.modelStorageClear.hidden = !cached;
 }
 
 const RULE_SOURCE_BADGES = Object.freeze({
@@ -1200,7 +1325,7 @@ function updateQueueRow(id, patch) {
 }
 
 function nextQueueItem() {
-  return state.queue.find((item) => item.status === "queued");
+  return state.queue.find((item) => item.status === SCANNABLE_STATUS);
 }
 
 function finishCurrentQueueItem() {
@@ -1237,8 +1362,16 @@ async function advanceQueue() {
       if (state.batchMode) renderBatchDashboard("files");
       continue;
     }
+    // Kullanıcının durdurduğu dosya "hata" değildir: sırada bekler ve "Belgeyi
+    // tara" ikinci kez basıldığında hiçbir şey sıfırlanmadan yeniden başlar.
+    if (state.cancelledScan) {
+      state.cancelledScan = false;
+      updateQueueRow(next.id, { status: SCANNABLE_STATUS, progressText: "", progressRatio: 0, progressIndeterminate: false });
+      renderQueue();
+      break;
+    }
     if (succeeded) updateQueueRow(next.id, { status: "done", progressText: "", progressRatio: 1, progressIndeterminate: false });
-    else updateQueueRow(next.id, { status: "error", progressText: "Tarama başarısız oldu.", progressRatio: 0, progressIndeterminate: false });
+    else updateQueueRow(next.id, { status: "error", progressText: "Tarama başarısız oldu · yeniden denenebilir", progressRatio: 0, progressIndeterminate: false });
     updateBatchProgressHeading();
     renderQueue();
   }
@@ -1369,6 +1502,7 @@ async function toggleQueueItemNow(requestedItem) {
   state.expandedQueueItemId = item.id;
   state.filename = item.file.name;
   state.findings = item.findings;
+  state.replacementPlan = item.replacementPlan || [];
   state.selectedFindingIds = new Set(
     Array.isArray(item.selectedFindingIds) ? item.selectedFindingIds : item.findings.map((finding) => finding.id)
   );
@@ -1542,20 +1676,32 @@ function settleQueueConfirmation(accepted) {
   resolve(accepted);
 }
 
+// Klasör seçiminde işletim sisteminin ve Office'in kendi çöp dosyaları da
+// gelir (.DS_Store, Thumbs.db, ~$ ile başlayan kilit dosyaları). Bunları
+// "desteklenmeyen tür" diye saymak, kullanıcıya klasöründe olmayan bir sorunu
+// bildirmek olurdu.
+const IGNORED_FILENAMES = /^(?:\.|~\$)|^(?:Thumbs\.db|desktop\.ini)$/iu;
+
+function baseName(file) {
+  return String(file.name || "").split("/").pop();
+}
+
 async function buildQueueFromFileList(fileList, { onProgress, signal } = {}) {
-  const files = [...fileList];
+  const files = [...fileList].filter((file) => !IGNORED_FILENAMES.test(baseName(file)));
   const acceptedPattern = new RegExp(`(?:${acceptedDocumentExtensions().map((extension) => extension.replace(".", "\\.")).join("|")})$`, "iu");
   const supported = files.filter((file) => acceptedPattern.test(file.name));
   const rejectedByType = files.length - supported.length;
   const withinSize = supported.filter((file) => file.size <= MAX_FILE_SIZE);
   const rejectedBySize = supported.filter((file) => file.size > MAX_FILE_SIZE);
-  if (rejectedByType > 0) {
-    showError(`${rejectedByType} dosya desteklenmeyen türde olduğu için listeden çıkarıldı.`);
-  }
-  if (rejectedBySize.length) {
-    showError(`${rejectedBySize.length} dosya 50 MB sınırını aştığı için listeden çıkarıldı.`);
-  }
+  // Elenenler tek bir özet olarak bildirilir. Ayrı ayrı bildirildiğinde her
+  // bildirim bir öncekinin üstüne yazılıyor, kullanıcı yalnız sonuncusunu
+  // görüyordu; bir klasörde bu, onlarca dosyanın sessizce düşmesi demekti.
+  const skipped = [];
+  if (rejectedByType > 0) skipped.push(`${rejectedByType} dosya desteklenmeyen türde`);
+  if (rejectedBySize.length) skipped.push(`${rejectedBySize.length} dosya 50 MB sınırının üstünde`);
+
   const genuine = [];
+  const failedValidation = [];
   let processed = files.length - withinSize.length;
   onProgress?.(processed, files.length);
   for (const file of withinSize) {
@@ -1564,11 +1710,15 @@ async function buildQueueFromFileList(fileList, { onProgress, signal } = {}) {
       await validateDocumentBytes(await file.arrayBuffer(), file.name);
       genuine.push(file);
     } catch (error) {
-      showError(error instanceof Error ? error.message : `${file.name} doğrulanamadı.`);
+      failedValidation.push(error instanceof Error ? error.message : `${baseName(file)} doğrulanamadı.`);
     }
     processed += 1;
     onProgress?.(processed, files.length);
   }
+  if (failedValidation.length === 1) skipped.push(failedValidation[0]);
+  else if (failedValidation.length > 1) skipped.push(`${failedValidation.length} dosya içerik doğrulamasından geçmedi`);
+  if (skipped.length) showError(`Listeye alınmadı: ${skipped.join(" · ")}.`);
+
   return genuine.map((file) => ({
     id: makeQueueId(),
     file,
@@ -1577,13 +1727,26 @@ async function buildQueueFromFileList(fileList, { onProgress, signal } = {}) {
     progressRatio: 0,
     progressIndeterminate: false,
     findings: [],
+    replacementPlan: [],
     selectedFindingIds: [],
   }));
 }
 
-async function selectFiles(fileList) {
+// Klasör seçiminde işletim sisteminin penceresi yalnızca klasörleri listeler;
+// kullanıcı ne seçtiğini orada göremez ve klasördeki her şey tek hamlede
+// alınmış gibi hisseder. Karşılığı burada verilir: klasörden ne alındığı,
+// neyin elendiği ve sıraya giren dosyaların tam listesi tarama başlamadan
+// önce ekranda durur; istenmeyenler tek tek çıkarılabilir.
+function selectFolder(files) {
+  const relative = files.find((file) => file.webkitRelativePath)?.webkitRelativePath || "";
+  return selectFiles(files, { folderName: relative.split("/")[0] || "", pickedCount: files.length });
+}
+
+async function selectFiles(fileList, { folderName = "", pickedCount = 0 } = {}) {
   const { controller, tracker } = beginOperation("scan");
-  tracker.start("reading", Math.max(1, fileList.length), "Dosya türü ve içeriği cihazında doğrulanıyor.");
+  tracker.start("reading", Math.max(1, fileList.length), folderName
+    ? `“${folderName}” klasöründeki ${fileList.length.toLocaleString("tr-TR")} dosyanın türü ve içeriği cihazında doğrulanıyor.`
+    : "Dosya türü ve içeriği cihazında doğrulanıyor.");
   await nextPaint();
   let queue;
   try {
@@ -1602,7 +1765,8 @@ async function selectFiles(fileList) {
     finishOperation("scan", controller);
   }
   if (!queue.length) {
-    if (fileList.length) showError("Geçerli bir DOCX, XLSX, PDF, UTF-8 TXT, JPG veya PNG dosyası seçin.");
+    if (folderName) showError(`“${folderName}” klasöründe taranabilecek DOCX, XLSX, PDF, TXT, JPG veya PNG dosyası bulunamadı.`);
+    else if (fileList.length) showError("Geçerli bir DOCX, XLSX, PDF, UTF-8 TXT, JPG veya PNG dosyası seçin.");
     return;
   }
 
@@ -1620,20 +1784,28 @@ async function selectFiles(fileList) {
   elements.reviewBack.replaceChildren(reviewBackIcon, document.createTextNode(" Başka dosya seç"));
   renderQueue();
 
+  const skippedFromFolder = Math.max(0, pickedCount - queue.length);
+  const folderNote = folderName
+    ? `“${folderName}” klasöründen ${queue.length.toLocaleString("tr-TR")} dosya alındı${skippedFromFolder ? ` · ${skippedFromFolder.toLocaleString("tr-TR")} dosya atlandı` : ""}`
+    : "";
   if (queue.length === 1) {
     const file = queue[0].file;
     state.pendingFile = file;
     state.preflightPromise = preflightFile(file);
-    elements.selectedFilename.textContent = file.name;
-    elements.selectedFilenameDetail.textContent = "Tarama ayarlarını seç";
+    elements.selectedFilename.textContent = file.webkitRelativePath || file.name;
+    elements.selectedFilenameDetail.textContent = folderNote || "Tarama ayarlarını seç";
     elements.scanButtonLabel.textContent = "Belgeyi tara";
   } else {
     state.pendingFile = null;
     state.preflightPromise = null;
     elements.largeFileWarning.hidden = true;
     elements.largeFileWarning.textContent = "";
-    elements.selectedFilename.textContent = `${queue.length} dosya seçildi`;
-    elements.selectedFilenameDetail.textContent = "Tarama ayarlarını seç · dosyalar sırayla, tek tek işlenecek";
+    elements.selectedFilename.textContent = folderName
+      ? `“${folderName}” · ${queue.length} dosya`
+      : `${queue.length} dosya seçildi`;
+    elements.selectedFilenameDetail.textContent = folderNote
+      ? `${folderNote} · istemediklerini listeden çıkarabilirsin`
+      : "Tarama ayarlarını seç · dosyalar sırayla, tek tek işlenecek";
     elements.scanButtonLabel.textContent = `Taramayı başlat (${queue.length} dosya)`;
   }
   elements.scanSetup.hidden = false;
@@ -1688,7 +1860,22 @@ document.querySelectorAll(".pressable").forEach(installPressFeedback);
 document.querySelectorAll(".danger-outline").forEach(installDangerHover);
 elements.ruleAdd.addEventListener("click", addCustomRule);
 elements.ruleRefreshButton.addEventListener("click", () => loadCorporateRules());
+elements.modelStorageClear.addEventListener("click", async () => {
+  elements.modelStorageClear.disabled = true;
+  try {
+    const removed = await clearNerModelCache();
+    showError(removed
+      ? `Model bu cihazdan kaldırıldı (${removed} dosya). Sonraki taramada yeniden indirilecek.`
+      : "Kaldırılacak model dosyası bulunamadı.");
+  } catch {
+    showError("Model önbelleği temizlenemedi.");
+  } finally {
+    elements.modelStorageClear.disabled = false;
+    renderModelStorage();
+  }
+});
 loadCorporateRules();
+renderModelStorage();
 const recommendation = recommendedProfile();
 elements.deviceRecommendation.textContent = recommendation === "thorough"
   ? "Bu cihazda Kapsamlı tarama kullanılabilir. Varsayılan seçim: Dengeli."
@@ -1698,9 +1885,46 @@ for (const input of document.querySelectorAll('input[name="processing-profile"]'
     if (input.checked) state.profile = input.value;
   });
 }
+// Tarama başarısız olduğunda dosya kuyrukta "error" durumunda kalıyor,
+// nextQueueItem() da yalnızca "queued" dosyalara bakıyordu: "Belgeyi tara"
+// düğmesi sessizce hiçbir şey yapmıyor, kullanıcı sayfayı yenilemeden ikinci
+// denemeyi yapamıyordu. Yeniden denemede hatalı dosyalar sıraya geri alınır.
+function requeueFailedItems() {
+  for (const item of itemsToRequeue(state.queue)) {
+    updateQueueRow(item.id, { status: SCANNABLE_STATUS, progressText: "", progressRatio: 0, progressIndeterminate: false });
+  }
+}
+
+// Kural doğrulaması taramanın içinde patlıyordu: kullanıcı hata mesajını
+// görüyor, dosya "hata"ya düşüyor, düzeltip yeniden denemek istediğinde de
+// düğme cevap vermiyordu. Doğrulama artık tarama başlamadan yapılır ve eksik
+// alan doğrudan odaklanır.
+function customRulesReadyForScan() {
+  try {
+    normalizeCustomRules(state.customRules);
+    return true;
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "Özel kurallar doğrulanamadı.");
+    const broken = state.customRules.find((rule) =>
+      Boolean(String(rule.find || "").trim()) !== Boolean(String(rule.replacement || "").trim()));
+    const row = broken && elements.customRulesList.querySelector(`[data-rule-id="${CSS.escape(broken.id)}"]`);
+    if (row) {
+      const inputs = [...row.querySelectorAll("input")];
+      (inputs.find((input) => !input.value.trim()) || inputs[0])?.focus();
+      row.scrollIntoView({ behavior: REDUCED_MOTION.matches ? "auto" : "smooth", block: "center" });
+    }
+    return false;
+  }
+}
+
 elements.scanButton.addEventListener("click", async () => {
-  if (!state.queue.length) return;
+  if (!canStartScan(state.queue)) return;
+  if (state.batchScanning || operationCoordinator.active("scan")) return;
+  if (!customRulesReadyForScan()) return;
+  requeueFailedItems();
+  if (!nextQueueItem()) return;
   if (!(await confirmScanWithoutRules())) return;
+  state.cancellingAll = false;
   advanceQueue();
 });
 elements.changeFile.addEventListener("click", () => elements.fileInput.click());
@@ -1711,6 +1935,7 @@ elements.processingCancel.addEventListener("click", () => {
     return;
   }
   if (!operationCoordinator.abort("export", new DOMException("İşlem iptal edildi.", "AbortError"))) {
+    state.cancelledScan = true;
     operationCoordinator.abort("scan", new DOMException("İşlem iptal edildi.", "AbortError"));
   }
   setProcessing(false);
@@ -1724,11 +1949,21 @@ elements.dropZone.addEventListener("keydown", (event) => {
     elements.fileInput.click();
   }
 });
+// Girdi değeri hemen boşaltılır: aksi hâlde aynı dosya ya da aynı klasör
+// ikinci kez seçildiğinde "change" hiç tetiklenmez ve uygulama tepkisiz görünür.
+function takeSelection(input) {
+  const files = [...input.files];
+  input.value = "";
+  return files;
+}
+
 elements.fileInput.addEventListener("change", () => {
-  if (elements.fileInput.files.length) selectFiles(elements.fileInput.files);
+  const files = takeSelection(elements.fileInput);
+  if (files.length) selectFiles(files);
 });
 elements.folderInput.addEventListener("change", () => {
-  if (elements.folderInput.files.length) selectFiles(elements.folderInput.files);
+  const files = takeSelection(elements.folderInput);
+  if (files.length) selectFolder(files);
 });
 
 window.addEventListener("dragenter", (event) => {

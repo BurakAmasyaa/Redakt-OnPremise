@@ -20,6 +20,55 @@ const NER_MODEL_WEIGHT_FILES = Object.freeze([
 
 const MIN_MEASURABLE_MODEL_BYTES = 1024 * 1024;
 
+// Transformers.js indirdiği varlıkları tarayıcının Cache Storage'ında
+// "transformers-cache" adlı depoda tutar. Kullanıcının bilmesi gereken de tam
+// olarak budur: model bir kez sunucudan alınır, sonra bu cihazın tarayıcı
+// profilinde kalır — cihazdan çıkmaz, sunucuya geri gitmez, başka bir profile
+// taşınmaz. Nerede durduğu söylenmediği sürece "yerel model" ifadesi
+// kullanıcı için doğrulanamayan bir iddia olarak kalıyordu.
+export const NER_MODEL_CACHE_NAME = "transformers-cache";
+export const NER_MODEL_PATH = "models/redakt-turkish-ner/";
+
+export function nerModelStorage({
+  origin = globalThis.location?.origin || "",
+  baseUri = globalThis.document?.baseURI || globalThis.location?.href || "",
+} = {}) {
+  let sourceUrl = NER_MODEL_PATH;
+  try {
+    sourceUrl = new URL(NER_MODEL_PATH, baseUri || origin || "http://127.0.0.1").href;
+  } catch {
+    sourceUrl = `${origin}/${NER_MODEL_PATH}`;
+  }
+  return {
+    cacheName: NER_MODEL_CACHE_NAME,
+    sourceUrl,
+    totalBytes: NER_MODEL_TOTAL_BYTES,
+    files: Object.keys(NER_MODEL_ASSET_BYTES),
+  };
+}
+
+export function formatModelSize(bytes = NER_MODEL_TOTAL_BYTES) {
+  return `${Math.round(bytes / (1024 * 1024)).toLocaleString("tr-TR")} MB`;
+}
+
+// Modeli cihazdan silmek kullanıcının hakkıdır: nerede durduğunu söyleyip
+// kaldırma yolunu vermemek yarım bir cevap olurdu.
+export async function clearNerModelCache({ cacheStorage = globalThis.caches, modelBaseUrl } = {}) {
+  // Taban adres gövdede çözülür: varsayılan parametre olsaydı Cache Storage
+  // bulunmayan bir ortamda (test, worker, eski tarayıcı) daha koruma
+  // denetimine gelmeden URL kurulmaya çalışılırdı.
+  if (!cacheStorage?.open) return 0;
+  const prefix = new URL(modelBaseUrl || nerModelStorage().sourceUrl).href;
+  const cache = await cacheStorage.open(NER_MODEL_CACHE_NAME);
+  const entries = await cache.keys();
+  let removed = 0;
+  for (const request of entries) {
+    if (!request.url.startsWith(prefix)) continue;
+    if (await cache.delete(request)) removed += 1;
+  }
+  return removed;
+}
+
 export async function isNerModelCached({
   cacheStorage = globalThis.caches,
   modelBaseUrl = new URL("models/redakt-turkish-ner/", globalThis.document?.baseURI || globalThis.location?.href),

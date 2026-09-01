@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  clearNerModelCache,
   formatModelDownloadBytes,
+  formatModelSize,
   createModelDownloadAggregator,
   isMeasurableModelDownload,
   isNerModelCached,
+  nerModelStorage,
+  NER_MODEL_CACHE_NAME,
   NER_MODEL_DOWNLOAD_MESSAGE,
   NER_MODEL_TOTAL_BYTES,
 } from "../src/model-cache.js";
@@ -87,4 +91,46 @@ test("model hazır olmadan yuvarlanan ilerleme yüzde 100'e ulaşmaz", () => {
   assert.equal(Math.round((beforeReady.loaded / beforeReady.total) * 100), 99);
   const ready = aggregate.complete();
   assert.equal(Math.round((ready.loaded / ready.total) * 100), 100);
+});
+
+// Uygulama "yerel model" diyor ama modelin cihazda nereye indiğini
+// söylemiyordu. Kullanıcı ne doğrulayabiliyor ne de kaldırabiliyordu;
+// doğrulanamayan bir mahremiyet iddiası iddia olarak kalır.
+test("modelin cihazda nerede durduğu tam olarak bildirilir", () => {
+  const storage = nerModelStorage({ baseUri: "https://redakt.sirket.local/uygulama/" });
+  assert.equal(storage.cacheName, NER_MODEL_CACHE_NAME);
+  assert.equal(storage.sourceUrl, "https://redakt.sirket.local/uygulama/models/redakt-turkish-ner/");
+  assert.equal(storage.totalBytes, NER_MODEL_TOTAL_BYTES);
+  assert.ok(storage.files.includes("onnx/model_q4.onnx_data"));
+  assert.equal(formatModelSize(NER_MODEL_TOTAL_BYTES), "147 MB");
+});
+
+test("model cihazdan kaldırılabilir ve yalnız model dosyaları silinir", async () => {
+  const modelBaseUrl = "https://redakt.sirket.local/models/redakt-turkish-ner/";
+  const stored = [
+    `${modelBaseUrl}onnx/model_q4.onnx`,
+    `${modelBaseUrl}tokenizer.json`,
+    "https://redakt.sirket.local/fonts/switzer-regular.woff2",
+  ];
+  const deleted = [];
+  const cacheStorage = {
+    async open(name) {
+      assert.equal(name, NER_MODEL_CACHE_NAME);
+      return {
+        keys: async () => stored.map((url) => ({ url })),
+        delete: async (request) => {
+          deleted.push(request.url);
+          return true;
+        },
+      };
+    },
+  };
+
+  const removed = await clearNerModelCache({ cacheStorage, modelBaseUrl });
+  assert.equal(removed, 2);
+  assert.deepEqual(deleted, stored.slice(0, 2));
+});
+
+test("Cache Storage olmayan ortamda kaldırma sessizce hiçbir şey yapmaz", async () => {
+  assert.equal(await clearNerModelCache({ cacheStorage: undefined }), 0);
 });

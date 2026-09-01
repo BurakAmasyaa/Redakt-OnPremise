@@ -102,6 +102,11 @@
           <input id="folder-input" type="file" accept=".docx,.xlsx,.pdf,.txt,.jpg,.jpeg,.png" webkitdirectory directory multiple hidden />
           <button class="folder-select-button pressable" id="folder-select-button" type="button">Klasör seç</button>
         </div>
+        <p class="folder-hint" id="folder-hint">
+          Klasör seçerken işletim sisteminin penceresi yalnızca klasörleri gösterir, içindeki dosyaları değil.
+          Klasörün içeriği seçimden sonra burada listelenir; taramadan önce istemediklerini tek tek çıkarabilirsin.
+          Alt klasörler de taranır.
+        </p>
 
         <p class="pdf-support-note" id="pdf-support-note">Taranmış PDF sayfaları ve Office içine gömülü raster görseller cihazındaki Türkçe + İngilizce OCR ile okunur.</p>
 
@@ -138,6 +143,14 @@
             </div>
             <p class="device-recommendation" id="device-recommendation"></p>
           </fieldset>
+
+          <section class="model-storage" aria-labelledby="model-storage-title">
+            <div class="model-storage-copy">
+              <strong id="model-storage-title">Yerel model <span class="rule-source-badge" id="model-storage-badge" data-tone="loading">Kontrol ediliyor</span></strong>
+              <p id="model-storage-detail"></p>
+            </div>
+            <button class="rule-import-button pressable" id="model-storage-clear" type="button" hidden>Cihazdan kaldır</button>
+          </section>
 
           <section class="custom-rules-card" aria-labelledby="custom-rules-title">
             <div class="custom-rules-heading">
