@@ -27,12 +27,20 @@ function rmrf(target) {
 
 // --- 1. Sunucuyu tek dosyaya derle -----------------------------------------
 // npm ve pnpm esbuild'i farklı yerlere koyar; ikisini de destekle.
+//
+// Windows'ta node_modules\.bin altındaki dosya bir kabuk betiğidir (uzantısız
+// esbuild + esbuild.cmd); execFile onu doğrudan çalıştıramaz ve paket üretimi
+// daha ilk adımda düşer. Gerçek çalıştırılabilir, platform paketinin içindeki
+// esbuild.exe'dir; Windows'ta önce o aranır.
 function resolveEsbuild() {
-  const candidates = [
-    path.join(projectRoot, "node_modules", ".bin", "esbuild"),
-    path.join(projectRoot, "node_modules", ".pnpm", "node_modules", ".bin", "esbuild"),
-    path.join(serverRoot, "node_modules", ".bin", "esbuild"),
+  const roots = [
+    path.join(projectRoot, "node_modules"),
+    path.join(projectRoot, "node_modules", ".pnpm", "node_modules"),
+    path.join(serverRoot, "node_modules"),
   ];
+  const candidates = process.platform === "win32"
+    ? roots.map((root) => path.join(root, "@esbuild", "win32-x64", "esbuild.exe"))
+    : roots.map((root) => path.join(root, ".bin", "esbuild"));
   const found = candidates.find((candidate) => fs.existsSync(candidate));
   if (!found) {
     throw new Error(`esbuild bulunamadı. Aranan yerler:\n  ${candidates.join("\n  ")}\nProje kökünde bağımlılıkları kurun.`);
@@ -109,13 +117,46 @@ async function fetchWindowsNode() {
 }
 
 // --- 4. Yapılandırma ve betikler -------------------------------------------
+// Pakette sunucu <kok>\app\redakt-server.mjs olarak çalışır ve yolları çözerken
+// kullandığı kök bir üstü, yani paketin kendisidir: web, logs ve config onun
+// altındadır. Geliştirmedeki "../" ile başlayan yollar pakette bir seviye
+// dışarıyı gösterir; 1.0.1 kurulumunda .env bu yüzden elle düzeltilmişti.
+const PACKAGE_ENV_PATHS = [
+  ["STATIC_ROOT=../dist", "STATIC_ROOT=web"],
+  ["LOG_DIR=../logs", "LOG_DIR=logs"],
+  ["# Yollar server/ klasörüne görelidir.", "# Yollar paket köküne görelidir."],
+  ["#HTTPS_CERT=../config/redakt.crt", "#HTTPS_CERT=config/redakt.crt"],
+  ["#HTTPS_KEY=../config/redakt.key", "#HTTPS_KEY=config/redakt.key"],
+  ["#HTTPS_CA=../config/kurum-ca.crt", "#HTTPS_CA=config/kurum-ca.crt"],
+];
+
+function packageEnvExample() {
+  let example = fs.readFileSync(path.join(serverRoot, ".env.example"), "utf8");
+  for (const [from, to] of PACKAGE_ENV_PATHS) {
+    // Sessizce atlanırsa paket yanlış yolla çıkar ve hata kurulumda görülür.
+    if (!example.includes(from)) {
+      throw new Error(`.env.example içinde beklenen satır yok: "${from}". Paket yolları PACKAGE_ENV_PATHS içinde güncellenmeli.`);
+    }
+    example = example.replace(from, to);
+  }
+  return example;
+}
+
+// IIS ters proxy + Windows kimlik doğrulama şablonu pakete girer: erişim
+// kontrolü (AUTH_MODE=proxy) bu iki dosya olmadan kurulamıyor, kurulumu yapan
+// kişi de bunları elle yazmak zorunda kalıyordu.
+function copyIisTemplates() {
+  const source = path.join(projectRoot, "deploy", "iis");
+  if (!fs.existsSync(source)) {
+    throw new Error(`IIS şablonları bulunamadı: ${source}`);
+  }
+  fs.cpSync(source, path.join(outputRoot, "iis"), { recursive: true });
+}
+
 function writeSupportFiles() {
   fs.mkdirSync(path.join(outputRoot, "config"), { recursive: true });
-  // Paket düzeninde yollar app/ klasörüne göredir: web ve logs onun kardeşi.
-  const example = fs.readFileSync(path.join(serverRoot, ".env.example"), "utf8")
-    .replace("STATIC_ROOT=../dist", "STATIC_ROOT=../web")
-    .replace("LOG_DIR=../logs", "LOG_DIR=../logs");
-  fs.writeFileSync(path.join(outputRoot, "config", ".env.example"), example);
+  fs.writeFileSync(path.join(outputRoot, "config", ".env.example"), packageEnvExample());
+  copyIisTemplates();
 
   fs.writeFileSync(path.join(outputRoot, "redakt-check.cmd"),
     "@echo off\r\n" +
@@ -144,6 +185,7 @@ const shouldFetchNode = process.argv.includes("--fetch-node");
 log("Redakt On-Premise paketi hazırlanıyor…\n");
 rmrf(path.join(outputRoot, "app"));
 rmrf(path.join(outputRoot, "web"));
+rmrf(path.join(outputRoot, "iis"));
 
 log("1/4 · Sunucu kodu derleniyor");
 bundleServer();

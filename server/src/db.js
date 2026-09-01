@@ -36,6 +36,11 @@ function describeConnectionError(error) {
   return new Error(`SQL bağlantısı kurulamadı: ${message}`);
 }
 
+// Bağlantı şifreleme bilgisi CONNECTIONPROPERTY ile okunur. sys.dm_exec_connections
+// görünüşte aynı değeri verir ama SQL Server 2022'de sunucu düzeyinde
+// VIEW SERVER PERFORMANCE STATE ister; db_owner bile karşılamaz. Uygulamanın
+// hesabına yalnızca kural tablosunda SELECT verilen kurulumda /api/ready o yüzden
+// 503 dönüyordu. CONNECTIONPROPERTY hiçbir ek yetki istemez.
 export async function checkConnection(config) {
   const pool = await getPool(config);
   const result = await pool.request().query(`
@@ -44,6 +49,6 @@ export async function checkConnection(config) {
       CAST(SERVERPROPERTY('Edition') AS nvarchar(128))       AS edition,
       SUSER_SNAME()                                          AS login,
       DB_NAME()                                              AS database_name,
-      (SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @@SPID) AS encryption`);
+      CAST(CONNECTIONPROPERTY('encrypt_option') AS nvarchar(10)) AS encryption`);
   return result.recordset[0];
 }

@@ -33,3 +33,8 @@ dist-guard.pem
 
 # Claude Code yerel worktree kopyaları (199 MB)
 .claude/worktrees/
+
+# Sahadan gelen kurulum ekleri: gerçek sunucu adları, IP'ler, sertifika parmak
+# izleri ve hesap adları içerir; depoya girmez. Genel geçer olan kısımları
+# server/scripts/KURULUM.md ve deploy/iis altına işlenir.
+Redakt_Ekler/

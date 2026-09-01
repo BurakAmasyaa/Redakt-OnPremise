@@ -15,6 +15,7 @@ redakt-onprem\
   app\                            Sunucu (tek dosyaya derlenmiş)
   web\                            Uygulama, dil modeli ve OCR dosyaları
   config\.env.example             Örnek yapılandırma
+  iis\                            IIS ters proxy + erişim kontrolü şablonu
   logs\                           Servis kayıtları (kurulumda oluşur)
   kurulum.ps1                     Kurulum betiği
   redakt-check.cmd                Kurulum doğrulama
@@ -34,7 +35,9 @@ redakt-onprem\
 
 ### 1. Paketi kopyalayın
 
-Klasörü sunucuya kopyalayın, örneğin `C:\Redakt`.
+Klasörü sunucuya kopyalayın, örneğin `C:\Redakt`. IIS ters proxy aynı makinede
+olacaksa doğrudan sitenin fiziksel yolu olacak yere açın (ör.
+`C:\inetpub\wwwroot\Redakt`); IIS o klasörü kök olarak görmelidir.
 
 ### 2. Kurulum betiğini çalıştırın
 
@@ -47,6 +50,10 @@ powershell -ExecutionPolicy Bypass -File kurulum.ps1 -ServiceAccount "SIRKET\svc
 Betik şunları yapar: yapılandırma dosyasını oluşturur, `config` klasörünün
 okuma iznini servis hesabı ve yöneticilerle sınırlar, açılışta başlayan bir
 görev tanımlar ve güvenlik duvarında ilgili portu açar.
+
+> Ters proxy aynı makinedeyse `-SkipFirewall` ekleyin: `AUTH_MODE=proxy` iken
+> servis yalnızca `127.0.0.1` dinler, 8080'i ağa açmanın faydası yoktur.
+> Kullanıcılar siteye IIS'in 443 portundan erişir.
 
 ### 3. SQL parolasını şifreleyin
 
@@ -102,29 +109,35 @@ AUTH_TRUSTED_PROXIES=127.0.0.1,::1
 kimlik kontrolü proxy'de yapıldığı için servisin dışarıdan doğrudan görünmemesi
 gerekir. `HTTP_HOST` ile değiştirirseniz servis log'a uyarı yazar.
 
-**IIS (Application Request Routing) tarafında iki ayar zorunludur:**
+**IIS (Application Request Routing).** Gereken iki dosya pakette hazır gelir;
+elle `web.config` yazmanız gerekmez:
 
-1. Site için **Windows Authentication** açık, **Anonymous Authentication** kapalı.
-2. Proxy, istemciden gelen kimlik başlığını **silmeli** ve kendi doğruladığı
-   kullanıcıyı yazmalı. `web.config` içinde:
-
-```xml
-<rewrite>
-  <allowedServerVariables>
-    <add name="HTTP_X_REMOTE_USER" />
-  </allowedServerVariables>
-  <rules>
-    <rule name="Redakt">
-      <match url="(.*)" />
-      <serverVariables>
-        <!-- Istemcinin gonderdigi deger her kosulda ezilir. -->
-        <set name="HTTP_X_REMOTE_USER" value="{LOGON_USER}" />
-      </serverVariables>
-      <action type="Rewrite" url="http://127.0.0.1:8080/{R:1}" />
-    </rule>
-  </rules>
-</rewrite>
 ```
+iis\web.config                      → site köküne kopyalanır
+iis\App_Code\HeaderInjectorModule.cs → site kökündeki App_Code\ klasörüne
+```
+
+Sırasıyla:
+
+1. Paketi IIS sitesinin fiziksel yolu yapın (ör. `C:\inetpub\wwwroot\Redakt`) ve
+   `iis\` içindeki iki öğeyi site köküne kopyalayın. Site yolu paketin kökünü
+   göstermelidir; `iis` alt klasörü gösterilirse IIS kendi 404 sayfasını döner.
+2. Site için **Windows Authentication** açık, **Anonymous Authentication** kapalı.
+3. Uygulama havuzu **.NET CLR v4.0 / Integrated** olmalı: `App_Code` çalışma
+   anında derlenir, sunucuya derleyici kurmanız gerekmez.
+4. URL Rewrite 2.1 + ARR 3.0 kurulu, ARR'da **proxy enabled**.
+5. Server variable kilidini sunucu genelinde bir kez açın:
+
+```
+%windir%\system32\inetsrv\appcmd.exe unlock config -section:system.webServer/rewrite/allowedServerVariables
+```
+
+> **Kimlik başlığını URL Rewrite ile yazmayın.** `{LOGON_USER}` kural
+> çalıştığında (BeginRequest) **henüz boştur**; `<set name="HTTP_X_REMOTE_USER"
+> value="{LOGON_USER}" />` boş başlık gönderir ve servis her isteği "kimlik
+> başlığı yok" diye reddeder. Şablondaki `HeaderInjectorModule`
+> `PostAuthenticateRequest` aşamasında çalıştığı için kimlik doludur ve
+> istemciden gelen başlığı her koşulda ezer. Ayrıntı: `iis\README.md`.
 
 nginx karşılığı:
 
@@ -154,6 +167,25 @@ redakt-check.cmd
 Ağ erişimi, port, TLS, SQL bağlantısı, kural tablosu ve yetkileri sırayla
 denetler; sorun varsa nedenini ve çözümünü yazar.
 
+Servis ve ters proxy ayağa kalktıktan sonra uçtan uca da doğrulayın:
+
+| Kontrol | Beklenen |
+|---|---|
+| `https://<site>/api/health` | `200`, `durum: "ayakta"`, `sql.saglikli: true` |
+| `https://<site>/api/ready` | `200` (SQL'e ulaşılamıyorsa `503`) |
+| `https://<site>/api/rules` (tarayıcıdan, oturum açmış kullanıcı) | `200`, kural listesi |
+| `https://<site>/` | `200`, uygulama açılıyor |
+| `http://<site>/` | `301` → https |
+| Başka bir makineden `curl http://<sunucu>:8080/api/rules` | Bağlantı kurulamaz (servis yalnızca localhost dinler) |
+| Sahte başlıkla istek: `-H "X-Remote-User: baskasi"` | Log'da **kendi** kullanıcı adınız görünür |
+| `Get-ScheduledTask -TaskName "Redakt-OnPremise"` | `State = Running` |
+| `netstat -ano \| findstr :8080` | `127.0.0.1:8080 LISTENING` |
+
+Uygulama açıldığında log'a düşen `Kural listesi sunuldu` kaydındaki `kullanici`
+alanı, kimliğin proxy'den gerçekten geldiğinin kanıtıdır: alan boşsa ya da
+istekler `kimlik-basligi-yok` diye reddediliyorsa başlık enjeksiyonu çalışmıyor
+demektir.
+
 ### 6. Başlatın
 
 ```powershell
@@ -180,10 +212,12 @@ Paket varsayılan olarak HTTP dinler. Kurumsal kurulumda iki yol vardır:
 2. **Doğrudan TLS** — sertifika servise tanımlanır:
 
 ```
-HTTPS_CERT=..\config\redakt.crt
-HTTPS_KEY=..\config\redakt.key
-#HTTPS_CA=..\config\kurum-ca.crt
+HTTPS_CERT=config\redakt.crt
+HTTPS_KEY=config\redakt.key
+#HTTPS_CA=config\kurum-ca.crt
 ```
+
+Yollar paket köküne görelidir.
 
 İkisi birlikte verilmelidir; yalnızca biri verilirse servis anlaşılır bir
 hatayla durur. Sertifika tanımlıysa servis `Strict-Transport-Security`
@@ -200,7 +234,26 @@ Hiçbiri yapılmazsa kural listesi ağda düz metin geçer.
 | Parola çözülemiyor | Şifreli değer servis hesabından farklı bir hesapla üretilmiş olabilir; 3. adımı tekrarlayın |
 | Kullanıcılar erişemiyor | Güvenlik duvarı kuralı ve DNS kaydı |
 
+İlk kurulumlarda karşılaşılanlar:
+
+| Belirti | Kök neden | Çözüm |
+|---|---|---|
+| Görev başlıyor, servis "Yapılandırma eksik" diyor | `.env` `config\` altında değil ya da paket düzeni bozulmuş | `config\.env` paketin kökündeki `config` klasöründe olmalı |
+| HTTPS'te `500` | `web.config` yorumunda ardışık tire (`--`) → geçersiz XML | Yorumu düzeltin |
+| IIS'in kendi `404` sayfası | Site fiziksel yolu paketin kökünü göstermiyor | Yolu paket köküne alın |
+| "server variable ... is not allowed" | `allowedServerVariables` kilitli | 4b/5'teki `appcmd unlock` |
+| `500.52` | `HTTP_X_REMOTE_USER` hem site hem sunucu genelinde tanımlı | Site `web.config`'inden çıkarın |
+| Her istek `401`, log'da kimlik yok | Başlık `{LOGON_USER}` ile yazılmış (BeginRequest'te boş) ya da `App_Code` kopyalanmamış | Paketteki `iis\` şablonunu kullanın |
+| TLS "connection forcibly closed" | Sitenin adı için fazladan/yanlış DNS A kaydı | DNS'i tek doğru IP'ye indirin |
+| `/api/ready` `503`, "VIEW SERVER PERFORMANCE STATE denied" | SQL 2022'de `sys.dm_exec_connections` sunucu düzeyi izin ister | 1.0.2'de düzeltildi; sürümü yükseltin |
+| Görev `0x1`, "Key not valid for use in specified state" | `SQL_PASSWORD_ENC` başka bir hesapla şifrelenmiş | Servis hesabıyla yeniden üretin (3. adım) |
+
 ## Güncelleme
 
 `app\` ve `web\` klasörlerini yeni sürümle değiştirip görevi yeniden başlatın.
 `config\` ve `logs\` klasörlerine dokunmayın.
+
+Yeni paketin `iis\` şablonu değiştiyse site kökündeki `web.config` ve
+`App_Code\` da yenilenmelidir; `web.config` içinde siteye özel bir değişiklik
+yaptıysanız önce onu karşılaştırın. Çalışan sürümü `/api/health` yanıtındaki
+`surum` alanından doğrulayın.

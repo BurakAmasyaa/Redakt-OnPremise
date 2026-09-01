@@ -8,10 +8,21 @@ const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 
 // Geliştirmede server/.env, kurulum paketinde ise app/ yanındaki config/.env
 // kullanılır. REDAKT_ENV_FILE ile açıkça da verilebilir.
+//
+// Pakette sunucu tek dosyaya derlenip <kok>/app/ altına konur, yani serverRoot
+// paketin kökü olur ve yapılandırma <kok>/config/.env'dedir. Bu aday eksik
+// olduğu için 1.0.1 kurulumunda .env bulunamıyor, dosya elle taşınıyordu.
+export function envFileCandidates(file = process.env.REDAKT_ENV_FILE) {
+  if (file) return [file];
+  return [
+    path.join(serverRoot, ".env"),                          // geliştirme: server/.env
+    path.join(serverRoot, "config", ".env"),                // paket: <kok>/config/.env
+    path.resolve(serverRoot, "..", "config", ".env"),       // depo kökünde config/ tutan kurulumlar
+  ];
+}
+
 export function loadEnvFile(file = process.env.REDAKT_ENV_FILE) {
-  const candidates = file
-    ? [file]
-    : [path.join(serverRoot, ".env"), path.resolve(serverRoot, "..", "config", ".env")];
+  const candidates = envFileCandidates(file);
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
       process.loadEnvFile(candidate);

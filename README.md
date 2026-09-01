@@ -181,11 +181,42 @@ Paketi üretmek için:
 
 ```bash
 npm install
+cd server && npm install && cd ..
 npm run package
 ```
 
+`server/` kendi `package.json`'ına sahiptir ve `mssql` yalnızca orada bulunur;
+paketleyici sunucuyu bağımlılıklarıyla tek dosyaya derlediği için bu kurulum
+atlanırsa derleme "mssql çözülemedi" diye düşer.
+
 Çıktı `package/` klasörüne yazılır (~209 MB; büyük kısmı dil modeli ve OCR dosyaları).
 Windows çalışma zamanını da eklemek için `node server/build-package.mjs --fetch-node`.
+Pakete IIS ters proxy + erişim kontrolü şablonu da girer (`iis\`, kaynağı
+[deploy/iis](deploy/iis)).
+
+---
+
+## Redakt Guard — tarayıcı eklentisi
+
+Aynı maskeleme hattını ikinci bir tetikleyiciye bağlar: çalışan ChatGPT, Claude,
+Gemini veya Copilot arayüzüne bir belge sürüklediğinde dosya **uygulamanın
+JavaScript'ine ulaşmadan** durdurulur, cihazda taranır, maskelenir ve yalnızca
+maskelenmiş kopya yüklenir. Dosya yine hiçbir sunucuya gitmez.
+
+Prompt metni de kapsanır: yapıştırılan ve gönderilen metin kutuyu terk etmeden
+taranır. Bulgu yoksa akış hiç kesilmez; bulunanların tamamı kullanıcıya
+sorulmadan maskelenir. Eksik tarama, açılamayan tür veya motor hatası ham veriye
+düşmez, gönderimi durdurur.
+
+Her başarılı maskeleme için sunucuya yalnız kullanıcı kimliğiyle ilişkilendirilen
+kategori/adet özeti yazılır; kullanıcı adı güvenilen ters proxy'den gelir.
+Dosya adı, gerçek bulgu değerleri ve prompt audit gövdesine alınmaz.
+
+```bash
+npm run build:guard
+```
+
+Kurulum, mimari ve kapsam dışı kalanlar: **[guard/README.md](guard/README.md)**
 
 ---
 
@@ -308,6 +339,13 @@ başlığını silmeli.** Silmezse herhangi bir kullanıcı isteğine
 `X-Remote-User: baskasi` ekleyip başkası gibi görünür. Bu kodla zorlanamaz;
 IIS ve nginx örnekleri [kurulum belgesinde](server/scripts/KURULUM.md).
 
+IIS tarafı elle yazılmaz: `web.config` ve kimlik başlığını yazan modül
+[deploy/iis](deploy/iis) altında hazır gelir ve pakete `iis\` olarak kopyalanır.
+Başlığı URL Rewrite ile yazmak **çalışmaz** — `{LOGON_USER}` kural çalıştığında
+(BeginRequest) henüz boştur, servis her isteği kimliksiz sayar. Şablondaki
+`HeaderInjectorModule` kimlik doğrulamadan sonra (`PostAuthenticateRequest`)
+çalışır ve istemciden gelen başlığı her koşulda ezer.
+
 İzleme uçları (`/api/health`, `/api/ready`) kimlik istemez — izleme sistemi
 kimlik başlığı gönderemediği için aksi hâlde servisi ölü sanardı. Bu uçlar kural
 metni döndürmez, yalnızca sayaç ve durum.
@@ -336,7 +374,7 @@ temizlikte hiçbir zaman silinmez.
 ```bash
 npm install          # bağımlılıklar
 npm run dev          # tarayıcı uygulaması (vite, 127.0.0.1:5173)
-npm test             # 116 test
+npm test             # 211 test
 npm run build        # statik çıktı → dist/
 npm run package      # kurulum paketi → package/
 ```
@@ -380,9 +418,11 @@ server/       Şirket içi servis
   src/check.js          Kurulum doğrulama aracı
   scripts/              kurulum.ps1 ve KURULUM.md
 
+deploy/iis/   IIS ters proxy şablonu (web.config + kimlik başlığı modülü)
+
 public/models/   Türkçe NER modeli (~150 MB)
 public/ocr/      Tesseract dil dosyaları (~31 MB)
-tests/           129 test
+tests/           211 test
 ```
 
 ### Kural eşleştirme motoru
@@ -446,7 +486,18 @@ gerekiyor; Internet Explorer ve eski Edge çalışmaz.
   kendisi kalır — yeniden adlandırma tüm formül başvurularını bozma riski taşıyor.
   Etiketler e-posta veya boşluk içeremediği için pratikte dar bir durum.
 - **`kurulum.ps1` gerçek Windows'ta denenmedi.** İlk kurulumda küçük düzeltme
-  gerekebilir.
+  gerekebilir. İlk saha kurulumunda görev, betik yerine elle tanımlandı.
+- **IIS modülü gelen istek başlıklarını yansımayla açar.** ASP.NET başlık
+  koleksiyonunu salt okunur tutar; `HeaderInjectorModule` `IsReadOnly` bayrağını
+  yansıma ile kapatıp başlığı yazar ve **geri kilitlemez** (ASP.NET kendi
+  senkronizasyonunda koleksiyonu tekrar yazdığı için kilitli bırakmak istisnaya
+  yol açıyor). Belgelenmemiş bir iç yapıya dayanır; .NET Framework sürümü
+  değişirse şablonun sınanması gerekir. Modül yalnızca `X-Remote-User`
+  başlığına dokunur.
+- **IIS şablonu Kerberos yerine NTLM kullanıyor.** Ters proxy arkasındaki
+  loopback istekte Negotiate/Kerberos SPN doğrulamasına takıldığı için sağlayıcı
+  listesi NTLM'e sabitlendi. Kimlik yine etki alanında doğrulanır; Kerberos'un
+  sorunsuz çalıştığı ortamda `web.config` içinde Negotiate eklenebilir.
 
 ---
 
