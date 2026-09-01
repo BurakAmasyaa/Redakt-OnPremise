@@ -67,14 +67,27 @@ export function createStaticHandler(root) {
     }
 
     const extension = path.extname(found.file).toLowerCase();
-    response.writeHead(200, {
+    const headers = {
       "Content-Type": MIME_TYPES.get(extension) || "application/octet-stream",
       "Content-Length": found.stats.size,
       "ETag": etag,
       "Cache-Control": IMMUTABLE.test(found.file.replaceAll(path.sep, "/"))
         ? "public, max-age=31536000, immutable"
         : "no-cache",
-    });
+      // Varlıklar yalnızca bu uygulamaya aittir; başka sayfa gömemez.
+      "Cross-Origin-Resource-Policy": "same-origin",
+    };
+
+    // Çapraz kaynak yalıtımı SharedArrayBuffer'ı açar, o da ONNX'in WASM
+    // yolunu çok iş parçacıklı çalıştırır. Yalıtım olmadan model tek çekirdekte
+    // koşuyor (ölçüldü: 242 karakter/sn). Uygulamanın bütün varlıkları aynı
+    // kaynaktan geldiği için require-corp hiçbir yüklemeyi kırmaz.
+    if (extension === ".html") {
+      headers["Cross-Origin-Opener-Policy"] = "same-origin";
+      headers["Cross-Origin-Embedder-Policy"] = "require-corp";
+    }
+
+    response.writeHead(200, headers);
 
     if (request.method === "HEAD") {
       response.end();

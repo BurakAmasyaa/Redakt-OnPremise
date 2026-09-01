@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { detectNamedEntitiesInWorker } from "../src/ner-client.js";
+import { detectNamedEntitiesInWorker, releaseNerWorker } from "../src/ner-client.js";
 
 // Worker'ı taklit ederek hata iletim zincirini test eder.
 // Kişi/kurum tespiti sessizce boş dönerse belge eksik maskelenir; bu yüzden
@@ -8,17 +8,26 @@ import { detectNamedEntitiesInWorker } from "../src/ner-client.js";
 // ner-client model yolunu document.baseURI'den türetir.
 globalThis.document ??= { baseURI: "http://127.0.0.1/" };
 
+// Sahte worker gerçeğinin sözleşmesini taşır: her yanıt, isteğin requestId'sini
+// yankılar. Worker artık taramalar arasında ayakta kaldığı için (oturum kurma
+// bedeli her belgede yeniden ödenmesin diye) mesajlar kimliksiz eşleştirilemez.
 function stubWorker(behaviour) {
   const previous = globalThis.Worker;
+  let created = false;
   globalThis.Worker = class {
     constructor() {
+      created = true;
       this.listeners = new Map();
-      queueMicrotask(() => behaviour(this));
+      this.sent = [];
     }
     addEventListener(type, handler) {
       this.listeners.set(type, handler);
     }
-    postMessage() {}
+    postMessage(payload) {
+      this.sent.push(payload);
+      if (payload?.type === "cancel") return;
+      queueMicrotask(() => behaviour(this, payload?.requestId));
+    }
     terminate() {
       this.terminated = true;
     }
@@ -26,14 +35,20 @@ function stubWorker(behaviour) {
       this.listeners.get(type)?.(payload);
     }
   };
-  return () => { globalThis.Worker = previous; };
+  return {
+    created: () => created,
+    restore() {
+      globalThis.Worker = previous;
+      releaseNerWorker();
+    },
+  };
 }
 
 const TEXTS = ["Ahmet Yılmaz ile toplantı yapıldı."];
 
 test("model çalışmazsa hata yutulmaz, çağırana iletilir", async () => {
-  const restore = stubWorker((worker) => {
-    worker.emit("message", { data: { type: "error", name: "Error", message: "Yerel kişi/kurum modeli çalıştırılamadı.", detail: "no available backend found" } });
+  const stub = stubWorker((worker, requestId) => {
+    worker.emit("message", { data: { requestId, type: "error", name: "Error", message: "Yerel kişi/kurum modeli çalıştırılamadı.", detail: "no available backend found" } });
   });
   try {
     await assert.rejects(
@@ -44,11 +59,11 @@ test("model çalışmazsa hata yutulmaz, çağırana iletilir", async () => {
         return true;
       },
     );
-  } finally { restore(); }
+  } finally { stub.restore(); }
 });
 
 test("worker hiç başlamazsa da hata iletilir", async () => {
-  const restore = stubWorker((worker) => {
+  const stub = stubWorker((worker) => {
     worker.emit("error", { message: "Failed to construct 'Worker'" });
   });
   try {
@@ -60,12 +75,12 @@ test("worker hiç başlamazsa da hata iletilir", async () => {
         return true;
       },
     );
-  } finally { restore(); }
+  } finally { stub.restore(); }
 });
 
 test("teknik ayrıntı korunur ama sınırsız büyümez", async () => {
-  const restore = stubWorker((worker) => {
-    worker.emit("message", { data: { type: "error", message: "hata", detail: "x".repeat(1000) } });
+  const stub = stubWorker((worker, requestId) => {
+    worker.emit("message", { data: { requestId, type: "error", message: "hata", detail: "x".repeat(1000) } });
   });
   try {
     await assert.rejects(
@@ -75,12 +90,12 @@ test("teknik ayrıntı korunur ama sınırsız büyümez", async () => {
         return true;
       },
     );
-  } finally { restore(); }
+  } finally { stub.restore(); }
 });
 
 test("iptal edildiğinde teknik ayrıntı taşınmaz", async () => {
-  const restore = stubWorker((worker) => {
-    worker.emit("message", { data: { type: "error", name: "AbortError", message: "İşlem iptal edildi.", detail: null } });
+  const stub = stubWorker((worker, requestId) => {
+    worker.emit("message", { data: { requestId, type: "error", name: "AbortError", message: "İşlem iptal edildi.", detail: null } });
   });
   try {
     await assert.rejects(
@@ -91,27 +106,26 @@ test("iptal edildiğinde teknik ayrıntı taşınmaz", async () => {
         return true;
       },
     );
-  } finally { restore(); }
+  } finally { stub.restore(); }
 });
 
 test("başarılı sonuç bulguları döndürür", async () => {
-  const restore = stubWorker((worker) => {
-    worker.emit("message", { data: { type: "complete", findings: [{ id: "ner_1", value: "Ahmet Yılmaz" }] } });
+  const stub = stubWorker((worker, requestId) => {
+    worker.emit("message", { data: { requestId, type: "complete", findings: [{ id: "ner_1", value: "Ahmet Yılmaz" }] } });
   });
   try {
     const findings = await detectNamedEntitiesInWorker(TEXTS);
     assert.equal(findings.length, 1);
     assert.equal(findings[0].value, "Ahmet Yılmaz");
-  } finally { restore(); }
+  } finally { stub.restore(); }
 });
 
 test("boş metinde worker hiç oluşturulmaz", async () => {
-  let created = false;
-  const restore = stubWorker(() => { created = true; });
+  const stub = stubWorker(() => {});
   try {
     assert.deepEqual(await detectNamedEntitiesInWorker(["", "   "]), []);
-    assert.equal(created, false);
-  } finally { restore(); }
+    assert.equal(stub.created(), false);
+  } finally { stub.restore(); }
 });
 
 test("worker.js hatayı sabit metinle değiştirip ayrıntıyı atmaz", async () => {

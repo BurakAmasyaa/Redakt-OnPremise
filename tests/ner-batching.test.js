@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeNerBatches, nerBatchDelayMs, nerBatchSize } from "../src/ner-batching.js";
-
-test("NER kayıtlarını profile göre 100-200 arası batch boyutuna böler", () => {
-  assert.equal(nerBatchSize("fast"), 200);
-  assert.equal(nerBatchSize("balanced"), 150);
-  assert.equal(nerBatchSize("thorough"), 100);
-});
+import { mergeNerBatches, nerBatchDelayMs } from "../src/ner-batching.js";
 
 test("yalnız büyük NER işlerinde inference grupları arasına kısa termal boşluk ekler", () => {
   assert.equal(nerBatchDelayMs(Array.from({ length: 49 }, () => "kısa kayıt")), 0);

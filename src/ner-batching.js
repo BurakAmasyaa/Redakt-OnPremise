@@ -1,11 +1,6 @@
 import { categoryMeta, matchKey } from "./pii.js";
 
-export const NER_BATCH_SIZES = Object.freeze({ fast: 200, balanced: 150, thorough: 100 });
 export const LARGE_NER_WORKLOAD = Object.freeze({ minUnits: 50, minCharacters: 20_000, delayMs: 2 });
-
-export function nerBatchSize(profile = "balanced") {
-  return NER_BATCH_SIZES[profile] || NER_BATCH_SIZES.balanced;
-}
 
 export function nerBatchDelayMs(texts = []) {
   const units = Array.isArray(texts) ? texts : [];
