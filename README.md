@@ -198,34 +198,6 @@ Pakete IIS ters proxy + erişim kontrolü şablonu da girer (`iis\`, kaynağı
 
 ---
 
-## Redakt Guard — tarayıcı eklentisi
-
-Aynı maskeleme hattını ikinci bir tetikleyiciye bağlar: çalışan ChatGPT, Claude,
-Gemini veya Copilot arayüzüne bir belge sürüklediğinde dosya **uygulamanın
-JavaScript'ine ulaşmadan** durdurulur, cihazda taranır, maskelenir ve yalnızca
-maskelenmiş kopya yüklenir. Dosya yine hiçbir sunucuya gitmez.
-
-Prompt metni de kapsanır: yapıştırılan ve gönderilen metin kutuyu terk etmeden
-taranır. Bulgu yoksa akış hiç kesilmez; bulunanların tamamı kullanıcıya
-sorulmadan maskelenir. Eksik tarama, açılamayan tür veya motor hatası ham veriye
-düşmez, gönderimi durdurur.
-
-Her başarılı maskeleme için sunucuya yalnız kullanıcı kimliğiyle ilişkilendirilen
-kategori/adet özeti yazılır; kullanıcı adı güvenilen ters proxy'den gelir.
-Dosya adı, gerçek bulgu değerleri ve prompt audit gövdesine alınmaz.
-Sunucu adresi henüz yapılandırılmadıysa yerel maskeleme durmaz; PII içermeyen
-audit olayları sunucu bağlanana kadar sınırlı yerel kuyrukta bekler. Yapılandırılmış
-bir kural sunucusuna ulaşılamaması ise sessiz koruma düşüşü sayılır ve gönderimi
-durdurur.
-
-```bash
-npm run build:guard
-```
-
-Kurulum, mimari ve kapsam dışı kalanlar: **[guard/README.md](guard/README.md)**
-
----
-
 ## Kural yönetimi
 
 Kurallar uygulamadan değil, **doğrudan SQL'den** yönetilir. Varsayılan tablo
@@ -475,10 +447,15 @@ gerekiyor; Internet Explorer ve eski Edge çalışmaz.
 ## Bilinen açık konular
 
 - **Çok çekirdekli NER kapalı.** `crossOriginIsolated` false olduğu için ONNX tek
-  iş parçacığında çalışıyor; çok çekirdekli makinede tek çekirdek kullanılıyor.
-  `Cross-Origin-Embedder-Policy` başlığı eklenince izolasyon açılıyor **ama NER hiç
-  bulgu üretmiyor**; nedeni henüz bulunamadı. Bu yüzden başlık eklenmedi.
-  Çözülürse büyük belgelerde 3-6× hızlanma bekleniyor.
+  iş parçacığında çalışıyor (WebGPU yoksa). Nedeni artık biliniyor: yalıtım için
+  `Cross-Origin-Embedder-Policy: require-corp` gerekir ve bu başlık yalnız
+  belgeye konursa tarayıcı, HTTP'den yüklenen **her worker betiğinde** de aynı
+  başlığı arar; `.js`/`.mjs` yanıtları taşımadığı için NER, pdf.js ve Tesseract
+  worker'ları `ERR_BLOCKED_BY_RESPONSE` ile engellenir — sahada üçü birden
+  bozuldu. Yalıtım açılacaksa başlık **her yanıta** (worker betikleri ve ORT'un
+  iç iş parçacığı modülü dâhil) konmalı ve gerçek sunucuda doğrulanmalı;
+  geliştirme sunucusuna üretimde olmayan başlık koymak arızayı gizler. Beklenen
+  kazanç yalnız GPU'suz makinelerde, 3-6×.
 - **Belge düzeyinde KVKK denetim izi yok.** Log "kim, ne zaman kural listesini
   çekti"yi yazar; "kim, hangi belgeyi maskeledi"yi yazmaz. Yazabilmesi için
   tarayıcının sunucuya belge adı ve bulgu sayısı göndermesi gerekirdi — bu da

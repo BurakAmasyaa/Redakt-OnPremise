@@ -78,15 +78,18 @@ export function createStaticHandler(root) {
       "Cross-Origin-Resource-Policy": "same-origin",
     };
 
-    // Çapraz kaynak yalıtımı SharedArrayBuffer'ı açar, o da ONNX'in WASM
-    // yolunu çok iş parçacıklı çalıştırır. Yalıtım olmadan model tek çekirdekte
-    // koşuyor (ölçüldü: 242 karakter/sn). Uygulamanın bütün varlıkları aynı
-    // kaynaktan geldiği için require-corp hiçbir yüklemeyi kırmaz.
-    if (extension === ".html") {
-      headers["Cross-Origin-Opener-Policy"] = "same-origin";
-      headers["Cross-Origin-Embedder-Policy"] = "require-corp";
-    }
-
+    // Cross-Origin-Embedder-Policy BİLEREK YOK.
+    //
+    // Yalnız belgeye (.html) konan COEP sahada üç alt sistemi aynı anda düşürdü:
+    // belge çapraz kaynak yalıtımlı olunca tarayıcı, HTTP'den yüklenen her
+    // worker betiğinin yanıtında da COEP arar; .js/.mjs yanıtları başlığı
+    // taşımadığı için NER worker'ı, pdf.js worker'ı ve Tesseract worker'ı
+    // net::ERR_BLOCKED_BY_RESPONSE ile engellendi. Kullanıcıya görünen: "Kişi ve
+    // kurum adları aranamadı", "OCR ile okunamadı: bilinmeyen hata", "Dosya
+    // okunamadı". Vite dev sunucusu başlığı HER yanıta koyduğu için geliştirmede
+    // fark edilmedi. Yalıtım istenirse başlık worker betikleri ve ORT'un iç iş
+    // parçacığı modülü dâhil HER yanıta konmalı ve gerçek sunucuda doğrulanmalı;
+    // bkz. README "Bilinen açık konular".
     response.writeHead(200, headers);
 
     if (request.method === "HEAD") {
