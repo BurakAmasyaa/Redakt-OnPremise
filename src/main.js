@@ -24,6 +24,7 @@ import { DEFAULT_DOCUMENT_TITLE, scanDocumentTitle } from "./live-title.js";
 import { findingsForCategory, toggledCategory } from "./finding-filter.js";
 import { createBeforeUnloadGuard, hasActiveProcessing } from "./lifecycle.js";
 import { installGlobalErrorBoundary } from "./error-boundary.js";
+import { describeError } from "./error-message.js";
 
 const MAX_FILE_SIZE = MAX_DOCUMENT_FILE_SIZE;
 const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -866,7 +867,7 @@ async function handleFile(file, { backgroundQueue = false } = {}) {
       const { disposeDocument } = await import("./pipeline.js");
       await disposeDocument(workingContext);
     }
-    if (error?.name !== "AbortError") showError(error instanceof Error ? error.message : "Dosya okunamadı veya bozuk olabilir.");
+    if (error?.name !== "AbortError") showError(describeError(error, "Dosya okunamadı veya bozuk olabilir."));
   } finally {
     elements.fileInput.value = "";
     setProcessing(false);
@@ -1017,7 +1018,7 @@ async function processSelection() {
     elements.doneBatchBack.hidden = !state.batchMode;
     showStage(elements.doneStage);
   } catch (error) {
-    if (error?.name !== "AbortError") showError(error instanceof Error ? error.message : "Temiz kopya hazırlanamadı.");
+    if (error?.name !== "AbortError") showError(describeError(error, "Temiz kopya hazırlanamadı."));
   } finally {
     setProcessing(false);
     finishOperation("export", controller);
@@ -1625,7 +1626,7 @@ async function downloadAllQueueItems() {
       if (!state.bulkExporting) elements.batchInstruction.textContent = BATCH_INSTRUCTION;
     }, 4000);
   } catch (error) {
-    if (error?.name !== "AbortError") showError(error instanceof Error ? error.message : "Toplu indirme hazırlanamadı.");
+    if (error?.name !== "AbortError") showError(describeError(error, "Toplu indirme hazırlanamadı."));
   } finally {
     finishOperation("export", controller);
     state.bulkExporting = false;
@@ -1718,7 +1719,7 @@ async function buildQueueFromFileList(fileList, { onProgress, signal } = {}) {
       await validateDocumentBytes(await file.arrayBuffer(), file.name);
       genuine.push(file);
     } catch (error) {
-      failedValidation.push(error instanceof Error ? error.message : `${baseName(file)} doğrulanamadı.`);
+      failedValidation.push(describeError(error, `${baseName(file)} doğrulanamadı.`));
     }
     processed += 1;
     onProgress?.(processed, files.length);
@@ -1765,7 +1766,7 @@ async function selectFiles(fileList, { folderName = "", pickedCount = 0 } = {}) 
       },
     });
   } catch (error) {
-    if (error?.name !== "AbortError") showError(error instanceof Error ? error.message : "Dosyalar doğrulanamadı.");
+    if (error?.name !== "AbortError") showError(describeError(error, "Dosyalar doğrulanamadı."));
     return;
   } finally {
     setProcessing(false);
@@ -1912,7 +1913,7 @@ function customRulesReadyForScan() {
     normalizeCustomRules(state.customRules);
     return true;
   } catch (error) {
-    showError(error instanceof Error ? error.message : "Özel kurallar doğrulanamadı.");
+    showError(describeError(error, "Özel kurallar doğrulanamadı."));
     const broken = state.customRules.find((rule) =>
       Boolean(String(rule.find || "").trim()) !== Boolean(String(rule.replacement || "").trim()));
     const row = broken && elements.customRulesList.querySelector(`[data-rule-id="${CSS.escape(broken.id)}"]`);

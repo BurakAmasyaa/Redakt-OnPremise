@@ -1,4 +1,5 @@
 import { replacementsForText } from "./pii.js";
+import { describeError } from "./error-message.js";
 
 const MEDIA_TYPES = Object.freeze({
   png: "image/png",
@@ -90,7 +91,7 @@ export async function scanEmbeddedImages(zip, directory, options = {}) {
     }
   } catch (error) {
     if (error?.name === "AbortError") throw error;
-    throw new Error(`Gömülü Office görseli yerel OCR ile okunamadı: ${error instanceof Error ? error.message : "bilinmeyen hata"}`);
+    throw new Error(`Gömülü Office görseli yerel OCR ile okunamadı: ${describeError(error, "bilinmeyen hata")}`);
   } finally {
     if (worker) {
       if (options.ocrFactory) await worker.terminate?.();
